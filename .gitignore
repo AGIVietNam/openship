@@ -63,3 +63,6 @@ pnpm-debug.log*
 .react-router
 .wrangler
 next-env.d.ts
+docs/ssh-audit
+docs/research
+.playwright-mcp/

@@ -132,8 +132,11 @@ on your instance (for example `https://your-host/api/...`). Authenticate with a 
 `Authorization` header — create one from **Settings → Tokens** or with `openship token create`. See
 [Authentication](/docs/security/auth) for the full token model.
 
-You can set the **production** size (what your live app runs on) and, separately, the **build** size (the
-temporary machine that compiles your app). Sizes are given as `cpuCores`, `memoryMb`, and `diskMb`.
+You can set **production** resources for your live app and **build** resources for compilation.
+Sizes are given as `cpuCores`, `memoryMb`, and `diskMb`. On Openship Cloud, build CPU/RAM
+are optional upper limits: the engine selects an allocation from the pool's remaining capacity
+without taking resources reserved for running apps. Send `{"build": null}` to restore
+automatic sizing. A saved build cap does not change production resources.
 
 ```bash
 curl -X PATCH https://your-host/api/projects/PROJECT_ID/resources \
@@ -155,6 +158,9 @@ send only what you want to change.
 
 `GET /api/projects/PROJECT_ID/resources` reads the current values, and also reports the detected
 machine `capacity` (the ceiling) plus `requiresLimit` (true on cloud, where unsized isn't allowed).
+Openship Cloud also returns `buildMode`: `automatic` or `custom`. In automatic mode, the
+returned build CPU/RAM values are zero because no cap is saved; each build receives a
+concrete allocation from Oblien's current limits and usage.
 
 </Tab>
 

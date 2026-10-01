@@ -634,7 +634,9 @@ const ResourceSelection = Type.Object({
 
 export const UpdateResourcesBody = Type.Object({
   production: Type.Optional(ResourceSelection),
-  build: Type.Optional(ResourceSelection),
+  build: Type.Optional(Type.Union([ResourceSelection, Type.Null()], {
+    description: "Optional build resource limits. Cloud builds use available pool capacity up to these limits; null restores automatic sizing. Self-hosted builds use the target machine by default.",
+  })),
   sleepMode: Type.Optional(Type.Union([Type.Literal("auto_sleep"), Type.Literal("always_on")])),
   port: Type.Optional(Type.Number({ minimum: 1, maximum: 65535 })),
 });

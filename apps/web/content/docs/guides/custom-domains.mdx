@@ -87,6 +87,24 @@ The panel shows the records for your deployment:
 
 Copy each value exactly as shown — don't retype it, use the Copy button.
 
+If Cloudflare hosts your DNS, choose **Connect a DNS provider** in this panel. An owner or admin can
+add a token with **Zone:Read** and **DNS:Edit** for the relevant zones without leaving the deployment
+setup. The connection is saved in **Settings → Credentials** and can be reused across the workspace.
+Connecting verifies the token; it does not change DNS records.
+
+Credentials belong to the instance where you connect them. For a Cloud project opened through a
+linked local or desktop instance, connect the provider in the Cloud dashboard; local credentials
+are not copied to Cloud.
+
+For a saved domain, review the proposed additions or changes, then click **Auto-configure DNS**.
+Existing values are shown before repointing a record, unchanged records are skipped, and conflicting
+record sets are left for manual review. The record list refreshes after applying.
+
+During a new deployment, you can connect the provider ahead of time. If the domain has not been saved
+yet, deploy first and apply the records from its DNS settings afterward, or use **Manual DNS setup**
+to publish them now. Cloudflare is currently the supported provider for automatic record writes;
+other providers use the manual steps below.
+
 </Step>
 
 <Step>
@@ -155,7 +173,7 @@ on the wildcard's card. The inline panel separates routing DNS from certificate 
 
 ### Automatic provider
 
-Connect **Cloudflare** in **Settings → DNS**, using a token with **Zone:Read** and **DNS:Edit** for
+Connect **Cloudflare** from the DNS panel or **Settings → Credentials**, using a token with **Zone:Read** and **DNS:Edit** for
 the relevant zone. Choose **Automatic provider**, then **Enable HTTPS automatically**. Openship
 publishes the certificate challenge, waits for DNS, obtains the certificate and removes its temporary
 TXT record. Keep the connection enabled so Openship can renew the certificate automatically.

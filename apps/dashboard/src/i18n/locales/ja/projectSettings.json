@@ -1,4 +1,27 @@
 {
+  "appInstall": {
+    "configurationLoading": "アプリの設定を読み込み中…",
+    "catalogLoadFailed": "アプリの詳細を読み込めませんでした。インストールする前に再試行してください。",
+    "routingLoadFailed": "保存済みのルーティング設定を読み込めませんでした。インストールする前に再試行してください。",
+    "retryConfiguration": "再試行",
+    "hostFitHint": "このまま続行できますが、このマシンでは性能が制限される場合があります。",
+    "cloudFitTitle": "このアプリには上位のCloudプランが必要です",
+    "upgradePlan": "プランをアップグレード",
+    "checkingCapacity": "容量を確認中…",
+    "checkCapacityAgain": "再確認",
+    "cloudFitUnavailable": "容量を確認できませんでした。デプロイ時に再確認します。",
+    "withoutDomainsTitle": "ドメインなしで続行しますか？",
+    "withoutDomainsBody": "これらの Web エンドポイントには公開ポートからのみアクセスできます。ドメインは後からプロジェクトで追加できます。",
+    "withoutDomainsCloudBody": "これらの Web エンドポイントには Cloud 上の公開 URL が設定されません。このアプリ内の他のサービスからは引き続きアクセスできます。ドメインは後からプロジェクトで追加できます。",
+    "addDomains": "ドメインを追加",
+    "continueWithoutDomains": "ドメインなしで続行",
+    "generatedDomainsTitle": "無料ドメインを使用しますか？",
+    "generatedDomainsBody": "これらのエンドポイントに無料の公開URLが割り当てられます。インストール前に名前を指定することもできます。",
+    "useGeneratedDomains": "無料ドメインを使用",
+    "editDomains": "ドメインを編集",
+    "routePortCloudDesc": "この Cloud ワークスペース内でのみアクセスできます。公開 URL を使うにはドメインを追加してください。",
+    "exposeTitle": "ドメインとルーティング"
+  },
   "settingSection": {
     "edit": "編集",
     "save": "保存",

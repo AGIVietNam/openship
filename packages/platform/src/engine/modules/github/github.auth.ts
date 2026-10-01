@@ -554,10 +554,15 @@ async function dropStaleInstallationRows(
 // ─── User OAuth token ────────────────────────────────────────────────────────
 
 /**
- * Get the user's personal GitHub OAuth token stored by Better Auth.
+ * Get the repository grant on Cloud, or the existing Better Auth OAuth token.
  * Used for user-scoped operations (listing their orgs, etc.).
  */
 export async function getUserToken(userId: string): Promise<string | null> {
+  if (env.CLOUD_MODE) {
+    const { getRepositoryAuthorizationToken } = await import("./github-repository-authorization");
+    const token = await getRepositoryAuthorizationToken(userId);
+    if (token !== undefined) return token;
+  }
   try {
     const tokens = await auth.api.getAccessToken({
       body: {
@@ -894,12 +899,8 @@ export async function getGitHubConnectionState(
   let appAvatar: string | undefined;
   let hasInstallations: boolean | undefined;
   try {
-    // App is connected ONLY when SaaS reports a real GitHub OAuth
-    // identity for this user. The Connect flow runs OAuth on SaaS first
-    // (creating a Better Auth `account` row for providerId='github'),
-    // so this signal is load-bearing. Without it the install webhook
-    // can't attribute installs to a SaaS user and the dashboard would
-    // be lying if it showed "connected".
+    // Cloud repository access uses the initiating user's GitHub grant.
+    // Installation ownership is recorded separately for the active workspace.
     const status = await getUserStatus(userId, ctx);
     appConnected = status.connected && status.tokenSource !== "cli";
     if (appConnected && status.connected) {
@@ -1428,9 +1429,9 @@ export async function consumeInstallState(
  * SaaS's /oauth-handoff endpoint, which mints a single-use bridge URL.
  * The browser opens that URL and the SaaS handles the entire OAuth
  * round-trip — local never has GitHub OAuth credentials. After OAuth
- * completes, the SaaS has a Better Auth `account` row for this user.
+ * completes, Cloud has a repository grant for this user.
  *
- * App mode (this IS the SaaS): linkSocialAccount is called directly via
+ * Direct SaaS connections start repository OAuth through
  * the controller's connectRedirect handler — the OAuth flow runs in the
  * same process. resolveOauthHandoffUrl is not used.
  *
@@ -1451,7 +1452,7 @@ export async function resolveOauthHandoffUrl(userId: string): Promise<{ url: str
  * Disconnect a user from a GitHub source.
  *
  * `source`:
- *   - "oauth" → remove the OAuth account row (Openship App / standalone OAuth)
+ *   - "oauth" → clear the Cloud repository grant; self-hosted unlinks OAuth
  *   - "cli"   → set the cli-suppression flag so the host's `gh auth token`
  *               is ignored even when present. NEVER touches the host's gh
  *               config - we only refuse to use it.
@@ -1464,9 +1465,12 @@ export async function disconnectUser(
   source: "oauth" | "cli" | "all" = "all",
 ): Promise<void> {
   if (source === "oauth" || source === "all") {
-    await repos.account.unlinkProvider(userId, "github");
+    if (env.CLOUD_MODE) {
+      const { disconnectRepositoryAuthorization } = await import("./github-repository-authorization");
+      await disconnectRepositoryAuthorization(userId);
+    } else await repos.account.unlinkProvider(userId, "github");
   }
-  if (source === "cli" || source === "all") {
+  if (!env.CLOUD_MODE && (source === "cli" || source === "all")) {
     // Also drop the stored device-flow token. Without this, "Disconnect" only
     // flipped the per-user opt-in while the credential itself stayed on the
     // instance — so the UI said disconnected and clones kept working. Dynamic

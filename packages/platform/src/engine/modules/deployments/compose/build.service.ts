@@ -409,6 +409,7 @@ export interface ComposeBuildImagesResult {
    * Needed when a refresh reuses the prior deployment's host artifact. */
   staticServiceIds: Set<string>;
   buildFailures: Map<string, string>;
+  buildErrorCauses?: unknown[];
   /** Count of image-only (external) services included in imageRefs */
   externalCount: number;
   /**
@@ -432,6 +433,7 @@ export async function buildComposeImages(opts: {
   composeInterpolationEnv: Record<string, string>;
   buildEnvVars: Record<string, string>;
   buildResources: ResourceConfig;
+  serviceBuildResources?: Record<string, ResourceConfig>;
   gitToken?: string;
   /** Relay helper path on the build host — desktop clone-on-server credential. */
   gitCredentialHelperPath?: string;
@@ -464,6 +466,7 @@ export async function buildComposeImages(opts: {
       .map((service) => service.id),
   );
   const buildFailures = new Map<string, string>();
+  const buildErrorCauses: unknown[] = [];
   const cancelledServices = new Set<string>();
   const startedAt = Date.now();
 
@@ -735,6 +738,10 @@ export async function buildComposeImages(opts: {
       //     keeps the sub-app's stack/installCommand/buildCommand/startCommand/
       //     outputDirectory so the runtime synthesizes a Dockerfile from them.
       const buildSlug = `${sanitizeComposeImageName(opts.project.slug ?? opts.project.name)}-${sanitizeComposeImageName(service.name)}`;
+      const resources = opts.serviceBuildResources?.[service.name] ?? opts.buildResources;
+      if (opts.serviceBuildResources && !Object.hasOwn(opts.serviceBuildResources, service.name)) {
+        throw new Error("The service build configuration changed after capacity was checked. Retry deployment to check its new allocation.");
+      }
       const buildConfig = isMonorepo
         ? createMonorepoSourceBuildConfig({
             project: opts.project,
@@ -742,7 +749,7 @@ export async function buildComposeImages(opts: {
             snapshot: opts.snapshot,
             sessionId: `${opts.buildSessionId}-${service.id}`,
             envVars: opts.buildEnvVars,
-            resources: opts.buildResources,
+            resources,
             gitToken: opts.gitToken,
             overrides: {
               slug: buildSlug,
@@ -781,7 +788,7 @@ export async function buildComposeImages(opts: {
             snapshot: opts.snapshot,
             sessionId: `${opts.buildSessionId}-${service.id}`,
             envVars: opts.buildEnvVars,
-            resources: opts.buildResources,
+            resources,
             gitToken: opts.gitToken,
             overrides: {
               slug: buildSlug,
@@ -844,6 +851,7 @@ export async function buildComposeImages(opts: {
       }
 
       if (buildResult.status === "failed" || !buildResult.imageRef) {
+        if (buildResult.errorCause) buildErrorCauses.push(buildResult.errorCause);
         const originalFailure =
           buildResult.errorMessage ?? `Failed to build service "${service.name}"`;
         const hint = dnsDiagnostics?.finish(originalFailure);
@@ -979,6 +987,7 @@ export async function buildComposeImages(opts: {
     staticArtifactRefs,
     staticServiceIds,
     buildFailures,
+    buildErrorCauses,
     externalCount: external.length,
     cancelled: cancelledServices.size > 0,
     durationMs: Date.now() - startedAt,

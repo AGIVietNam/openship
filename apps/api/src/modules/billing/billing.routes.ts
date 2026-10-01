@@ -52,6 +52,8 @@ r.use("/cancel", authMiddleware);
 r.use("/resume", authMiddleware);
 r.use("/usage", authMiddleware);
 r.use("/resources", authMiddleware);
+r.use("/capacity", authMiddleware);
+r.use("/capacity/*", authMiddleware);
 r.use("/allowances", authMiddleware);
 // The retired Stripe webhook always returns 410 and performs no mutation.
 
@@ -68,6 +70,9 @@ r.get(
 // mutation, just a passthrough to namespaces.usageUnits.
 r.get("/usage", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read metered Cloud usage over the requested date range, grouped by hour or day. This is billing data, not live workload metrics." }, query: BillingOperationSchemas.getUsage.input }, billingController.getUsage);
 r.get("/resources", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "List Cloud resources contributing to this workspace’s bill and usage." } }, billingController.getResources);
+r.get("/capacity", { tag: "billing:read", authorizationHandledByOperation: true, mcp: { description: "Read the Cloud pool's allocated CPU, memory and disk, and authorized project allocations. Includes stopped workspaces. Read this again after an adjustment to verify capacity release." } }, billingController.getCapacity);
+r.post("/capacity/preview", { tag: "billing:read", readOnly: true, authorizationHandledByOperation: true, body: BillingOperationSchemas.previewCapacity.input, mcp: { description: "Preview service resource edits and the services that may restart. Requires project and service write access, and the revision from capacity. Does not apply changes." } }, billingController.previewCapacity);
+r.post("/capacity/apply", { tag: "billing:write", authorizationHandledByOperation: true, auditHandledByOperation: true, rateLimit: "billing-portal", body: BillingOperationSchemas.applyCapacity.input, mcp: { description: "Apply a reviewed capacity adjustment with explicit restart confirmation. Reuses deployed images through normal deployment logs. Requires project and service write access. Reuse the idempotency key for retries; poll the returned deployment and capacity before retrying a blocked deploy." } }, billingController.applyCapacity);
 
 /* ---------- Allowance detail ---------- */
 // WHICH resources are consuming a quota, not just how many. The capacity meters

@@ -113,6 +113,7 @@ export {
   type NewDeployment,
   type BuildSession,
   type NewBuildSession,
+  type DeploymentResourceChanges,
   type Domain,
   type NewDomain,
   type DnsCredential,

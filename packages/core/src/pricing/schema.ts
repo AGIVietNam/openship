@@ -44,13 +44,13 @@ export const planLimitsSchema = z.object({
   runningServices: limitNumber,
   /** Projects (project groups). Oblien has no project concept — Openship gates it. */
   maxProjects: limitNumber,
-  /**
-   * The largest per-service machine this tier may select, named in the deploy
-   * wizard's OWN vocabulary (`RESOURCE_TIER_SPECS`). Stating a raw vCPU number
-   * here is what made the pricing page advertise sizes no picker offered.
-   * `null` = uncapped (enterprise).
-   */
+  /** Preset ceiling for saved offers without explicit service resources. */
   maxResourceTier: z.enum(RESOURCE_TIER_ORDER).nullable(),
+  /** CPU/RAM ceiling, including custom sizes. Absent on older paid snapshots. */
+  maxServiceResources: z.object({
+    cpuCores: z.number().finite().positive(),
+    memoryMb: z.number().int().positive(),
+  }).strict().nullable().optional(),
   /** Legacy display field. Paid offers leave it null: metered credits do not
    * imply a fixed number of runtime minutes. It never determines a credit grant. */
   computeMinutesPerMonth: limitNumber,
@@ -77,13 +77,15 @@ const planSchema = z.object({
       overdraft: z.number().int().min(0).max(1_000_000_000),
       suspendThreshold: z.number().int().min(0).max(1_000_000_000),
       onOverdraftAction: z.enum(["block", "stop_workspaces"]),
-      /** Declarative namespace policy. null inherits Oblien capacity; only
-       * max_workspaces is a namespace-wide count. Other fields cap one VM. */
+      /** VM ceilings and a separate total allocation for the namespace. */
       resourceLimits: z.object({
         max_workspaces: namespaceLimit,
         max_vcpus: namespaceLimit,
         max_ram_mb: namespaceLimit,
         max_disk_gb: namespaceLimit,
+        max_total_vcpus: namespaceLimit,
+        max_total_ram_mb: namespaceLimit,
+        max_total_disk_gb: namespaceLimit,
       }).strict(),
       checkoutName: z.string().min(1).max(120).optional(),
       checkoutDescription: z.string().min(1).max(500).optional(),
@@ -245,6 +247,32 @@ export const pricingCatalogSchema = z
         });
       }
       const annualPurchasable = plan.price.annual !== null && plan.price.annual > 0;
+      // Oblien wallet funding is 100 credits/USD. Retail allowances must be
+      // funded at list price; admin promotions record any deliberate subsidy.
+      for (const [price, credits, field] of [[plan.price.monthly, plan.billing.creditsPerCycle, "creditsPerCycle"],
+        [plan.price.annual, plan.billing.yearlyCreditsPerCycle, "yearlyCreditsPerCycle"]] as const) {
+        if (price != null && price > 0 && credits != null && credits > price) {
+          ctx.addIssue({ code: "custom", path: ["plans", i, "billing", field], message: "Namespace credits cannot exceed the wallet funding for this payment" });
+        }
+      }
+      if (monthlyPurchasable && !plan.contactSales && Object.values(plan.billing.resourceLimits).some(value => value === null)) {
+        ctx.addIssue({ code: "custom", path: ["plans", i, "billing", "resourceLimits"], message: "Retail plans require explicit VM and total namespace capacity limits" });
+      }
+      const service = plan.limits.maxServiceResources;
+      if (monthlyPurchasable && !plan.contactSales && !service) {
+        ctx.addIssue({ code: "custom", path: ["plans", i, "limits", "maxServiceResources"], message: "Retail plans require explicit per-service CPU and memory limits" });
+      }
+      if (service) {
+        const policy = plan.billing.resourceLimits;
+        for (const [dimension, caps] of [
+          ["cpuCores", [policy.max_vcpus, policy.max_total_vcpus]],
+          ["memoryMb", [policy.max_ram_mb, policy.max_total_ram_mb]],
+        ] as const) {
+          if (caps.some(cap => cap !== null && service[dimension] > cap)) {
+            ctx.addIssue({ code: "custom", path: ["plans", i, "limits", "maxServiceResources", dimension], message: "A service must fit within its workspace and shared capacity" });
+          }
+        }
+      }
       if (annualPurchasable && !plan.billing.yearlyCreditsPerCycle) {
         ctx.addIssue({
           code: "custom",
@@ -276,6 +304,10 @@ export const pricingCatalogSchema = z
     });
 
     const campaignIds = new Set<string>();
+    data.creditPacks.forEach((pack, i) => {
+      if (pack.creditsMilli / 1000 > pack.priceCents) ctx.addIssue({ code: "custom", path: ["creditPacks", i],
+        message: "Top-up credits cannot exceed the wallet funding for this payment" });
+    });
     data.campaigns.forEach((c, i) => {
       if (campaignIds.has(c.id)) {
         ctx.addIssue({ code: "custom", path: ["campaigns", i, "id"], message: `duplicate campaign id "${c.id}"` });

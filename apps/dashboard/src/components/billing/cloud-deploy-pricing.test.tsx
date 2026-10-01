@@ -179,12 +179,17 @@ describe("deployment plan selection", () => {
   });
 
   it("uses the selected interval's live price and credits while build limits stay monthly", async () => {
+    // An older saved plan can still have a separate monthly time limit.
+    mocks.get.mockResolvedValue({ data: { locale: "en", annual: { enabled: true, monthsFree: 0 }, ui: pricingUi("en"),
+      plans: plans.map(plan => ({ ...plan, limits: { ...plan.limits, buildMinutesPerMonth: 3000 } })) } });
     await render();
     await click("Deploy");
-    expect(document.body.textContent).toContain("1,234 credits / billing cycle");
+    expect(document.querySelector('[role="note"]')?.textContent).toContain("Hobby: 1,234");
+    expect(document.querySelector('[role="dialog"] details')).toBeNull();
+    expect(document.querySelectorAll('[role="dialog"] [role="note"]')).toHaveLength(1);
     await click(copy.pricing.annual);
     expect(document.body.textContent).toContain("$150");
-    expect(document.body.textContent).toContain("14,555 credits / billing cycle");
+    expect(document.querySelector('[role="note"]')?.textContent).toContain("Hobby: 14,555");
     expect(document.body.textContent).toContain("3,000 min / month");
     await click("Choose Hobby");
     expect(mocks.post.mock.calls[0]![1].interval).toBe("annual");

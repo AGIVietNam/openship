@@ -113,8 +113,7 @@ export function LibrarySidebar({
 // ─── Connection cards ───────────────────────────────────────────────────────
 
 /**
- * SaaS connection card. In CLOUD_MODE the Openship GitHub App is the
- * only credential source — there's no gh CLI on the SaaS server.
+ * SaaS connection card. The App and the user's own token are both usable.
  */
 function SaasConnectionCard({
   state,
@@ -124,19 +123,18 @@ function SaasConnectionCard({
   selectedOwner: string;
 }) {
   const { t } = useI18n();
-  const connected = state.sources.openshipApp.connected;
+  const personal = state.primary === "personal-token";
+  const identity = personal ? state.sources.personalToken : state.sources.openshipApp;
+  const connected = identity?.connected ?? false;
   return (
     <div className="bg-card rounded-2xl border border-border/50 p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <UiIcon name="github" className="size-4 text-muted-foreground" />
-        <h3 className="font-semibold text-foreground text-sm">{t.library.sidebar.connection}</h3>
-      </div>
+      <h3 className="mb-4 font-semibold text-foreground text-sm">{t.library.sidebar.connection}</h3>
       <SourceRow
-        icon={"github"}
-        label={t.library.sidebar.openshipGithubApp}
+        icon={personal ? "key" : "github"}
+        label={personal ? t.settings.github.methodToken : t.library.sidebar.openshipGithubApp}
         sublabel={
           connected
-            ? state.sources.openshipApp.login ?? selectedOwner ?? t.library.sidebar.connected
+            ? identity?.login ?? selectedOwner ?? t.library.sidebar.connected
             : t.library.sidebar.notConnected
         }
         connected={connected}
@@ -234,16 +232,20 @@ function SelfHostedConnectionCard({
       sublabel={appSublabel} connected
       tone={state.primary === "openship-app" ? "primary" : "secondary"} />
   ) : null;
+  const personal = state.sources.personalToken;
+  const tokenRow = personal?.connected ? (
+    <SourceRow key="personal-token" icon="key" label={t.settings.github.methodToken}
+      sublabel={personal.login ? `@${personal.login}` : t.library.sidebar.connected} connected
+      tone={state.primary === "personal-token" ? "primary" : "secondary"} />
+  ) : null;
 
   return (
     <div className="bg-card rounded-2xl border border-border/50 p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <UiIcon name="github" className="size-4 text-muted-foreground" />
-        <h3 className="font-semibold text-foreground text-sm">{t.library.sidebar.connection}</h3>
-      </div>
+      <h3 className="mb-4 font-semibold text-foreground text-sm">{t.library.sidebar.connection}</h3>
 
       <div className="space-y-2.5">
-        {state.primary === "openship-app" ? [appRow, cliRow] : [cliRow, appRow]}
+        {tokenRow}
+        {state.primary === "openship-app" ? [appRow, cliRow] : [cliConnected || !tokenRow ? cliRow : null, appRow]}
       </div>
 
       {/* Connection management includes the active App and stored-token repair. */}

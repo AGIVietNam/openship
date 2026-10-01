@@ -19,6 +19,10 @@
     "enterprise": {
       "name": "Enterprise",
       "tagline": "カスタムの上限、専用インフラ、SLA。"
+    },
+    "hobby": {
+      "name": "Hobby",
+      "tagline": "軽い開発や時々使うアプリ向け。利用クレジットには上限があります。"
     }
   },
   "features": {
@@ -27,6 +31,7 @@
     "anyWorkload": "何でも動かせる — コンテナ、Compose、ワーカー、Postgres、Redis",
     "runningServices": "同時に稼働するアプリ・データベース・ワーカー {runningServices} 個",
     "buildMinutes": "毎月 {buildMinutes} 分のビルド時間",
+    "meteredBuilds": "ビルドは共通クレジットを使用し、月ごとの時間上限はありません",
     "power": "アプリ 1 つあたり最大 {powerCpu} vCPU と {powerRamGb} GB RAM",
     "projects": "プロジェクト {maxProjects} 個",
     "projectsUnlimited": "プロジェクトは無制限",
@@ -49,7 +54,11 @@
     "selfHostedUnlimited": "デプロイ、プロジェクト、サーバー、ドメインすべて無制限",
     "selfHostedServices": "マネージドサービスはすべて利用可能 — Postgres、Redis、メール",
     "selfHostedClients": "CLI、Web、デスクトップ — バックエンドは一つ",
-    "selfHostedFreeSubdomains": "Openship Cloud に接続すると、無料の {freeDomainSuffix} サブドメインが {freeSubdomains} 個"
+    "selfHostedFreeSubdomains": "Openship Cloud に接続すると、無料の {freeDomainSuffix} サブドメインが {freeSubdomains} 個",
+    "usageCredits": "月あたり{credits}利用クレジット",
+    "namespaceCapacity": "合計: {namespaceCpu} vCPU、RAM {namespaceRamGb} GB、ディスク {namespaceDiskGb} GB",
+    "finiteUsage": "常時稼働にはクレジットの追加購入が必要な場合があります。",
+    "oneRunningService": "アプリ、データベース、ワーカーのいずれか1つを実行"
   },
   "selfHosted": {
     "name": "セルフホスト",
@@ -61,7 +70,12 @@
   "creditPacks": {
     "pack_5k": "{credits} クレジット",
     "pack_25k": "{credits} クレジット",
-    "pack_100k": "{credits} クレジット"
+    "pack_100k": "{credits} クレジット",
+    "pack_500": "{credits} クレジット",
+    "pack_2k": "{credits} クレジット",
+    "pack_400": "{credits} クレジット",
+    "pack_1700": "{credits} クレジット",
+    "pack_4500": "{credits} クレジット"
   },
   "ui": {
     "perMonth": "/月",

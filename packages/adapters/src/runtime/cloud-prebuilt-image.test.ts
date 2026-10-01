@@ -7,13 +7,19 @@ function fakeCloud() {
   const createWorkspace = vi.fn(async () => ({ id: "ws-prebuilt" }));
   const makeTemporary = vi.fn(async () => {});
   const makePermanent = vi.fn(async () => {});
-  const updateResources = vi.fn(async () => {});
+  const allocation = { cpus: 1, memory_mb: 768, disk_size_mb: 2048 };
+  const updateResources = vi.fn(async (resources: { cpus: number; memory_mb: number }) => {
+    Object.assign(allocation, { cpus: resources.cpus, memory_mb: resources.memory_mb });
+    return { success: true, relaunched: true };
+  });
   const createWorkload = vi.fn(async () => {});
   const deleteWorkload = vi.fn(async () => {});
   const deleteWorkspace = vi.fn(async () => {});
   const runtime = vi.fn(async () => ({}));
 
   const workspace = {
+    id: "ws-prebuilt",
+    get: vi.fn(async () => ({ id: "ws-prebuilt", resources: { ...allocation } })),
     lifecycle: { makeTemporary, makePermanent },
     resources: { update: updateResources },
     workloads: { create: createWorkload, delete: deleteWorkload },
@@ -35,6 +41,7 @@ function fakeCloud() {
     deleteWorkload,
     deleteWorkspace,
     runtime,
+    allocation,
   };
 }
 
@@ -174,6 +181,7 @@ describe("CloudRuntime prebuilt images", () => {
     // prepareImage connects once; deploy must not manipulate /app to honor
     // productionPaths inherited from source-build settings.
     expect(cloud.runtime).toHaveBeenCalledOnce();
+    expect(cloud.updateResources).not.toHaveBeenCalled();
   });
 
   it("still honors an explicit command override for a prebuilt image", async () => {
@@ -205,5 +213,17 @@ describe("CloudRuntime prebuilt images", () => {
         working_dir: "/app",
       }),
     );
+  });
+
+  it("releases the build CPU/RAM to Micro before activation without shrinking disk", async () => {
+    const cloud = fakeCloud();
+    cloud.allocation.cpus = 1;
+    cloud.allocation.memory_mb = 2048;
+    cloud.allocation.disk_size_mb = 32768;
+    const runtime = new CloudRuntime(cloud.client as never);
+    await runtime.deploy(deployConfig({ prebuiltImage: false, resources: { cpuCores: 0.25, memoryMb: 256, diskMb: 8192 } }));
+    expect(cloud.updateResources).toHaveBeenCalledExactlyOnceWith({ cpus: 0.25, memory_mb: 256, apply: true });
+    expect(cloud.allocation).toEqual({ cpus: 0.25, memory_mb: 256, disk_size_mb: 32768 });
+    expect(cloud.createWorkload).toHaveBeenCalledOnce();
   });
 });

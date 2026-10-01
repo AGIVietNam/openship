@@ -7,6 +7,7 @@ import {
   snapshotNeedsGitSource,
   snapshotNeedsProjectSource,
   withoutPinnedArtifacts,
+  strictRefreshImages,
 } from "@repo/platform/engine/modules/deployments/pinned-artifacts";
 
 describe("pinned artifact lookup", () => {
@@ -44,9 +45,19 @@ describe("pinned artifact lookup", () => {
       strictServiceScope: true,
       refreshServiceIds: ["svc-api"],
       forcePullImages: true,
+      capacityAdjustment: { key: "capacity-request", requestHash: "hash" },
       hasBuild: true,
     });
     expect(stripped).toEqual({ hasBuild: true });
+  });
+
+  it("waives a build reservation only for a strict refresh of every selected service", () => {
+    const meta = { ...snapshot, strictServiceScope: true, targetServiceIds: ["web", "db"], refreshServiceIds: ["web", "db"] };
+    expect(strictRefreshImages(meta)).toEqual(snapshot.handoverImages);
+    expect(strictRefreshImages({ ...meta, refreshServiceIds: ["web"] })).toBeUndefined();
+    expect(strictRefreshImages({ ...meta, strictServiceScope: false })).toBeUndefined();
+    expect(strictRefreshImages({ ...meta, targetServiceIds: [] })).toBeUndefined();
+    expect(strictRefreshImages(snapshot)).toBeUndefined();
   });
 
   it("normalizes the active deployment marker", () => {

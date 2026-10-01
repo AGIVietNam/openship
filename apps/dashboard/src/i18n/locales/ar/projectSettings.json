@@ -1,4 +1,27 @@
 {
+  "appInstall": {
+    "configurationLoading": "جارٍ تحميل إعدادات التطبيق…",
+    "catalogLoadFailed": "تعذّر تحميل تفاصيل التطبيق. حاول مجددًا قبل التثبيت.",
+    "routingLoadFailed": "تعذّر تحميل إعدادات التوجيه المحفوظة. حاول مجددًا قبل التثبيت.",
+    "retryConfiguration": "حاول مجددًا",
+    "hostFitHint": "يمكنك المتابعة. قد يكون أداء التطبيق محدودًا على هذا الجهاز.",
+    "cloudFitTitle": "يحتاج هذا التطبيق إلى خطة Cloud أكبر",
+    "upgradePlan": "ترقية الخطة",
+    "checkingCapacity": "جارٍ التحقق من السعة…",
+    "checkCapacityAgain": "التحقق مجددًا",
+    "cloudFitUnavailable": "تعذّر التحقق من السعة. سيُعاد التحقق عند النشر.",
+    "withoutDomainsTitle": "المتابعة بدون نطاقات؟",
+    "withoutDomainsBody": "لن يمكن الوصول إلى نقاط الويب هذه إلا عبر منافذها المنشورة. يمكنك إضافة نطاقات لاحقًا من المشروع.",
+    "withoutDomainsCloudBody": "لن يكون لنقاط الويب هذه رابط عام على Cloud. ستظل الخدمات الأخرى في هذا التطبيق قادرة على الوصول إليها. يمكنك إضافة نطاقات لاحقًا من المشروع.",
+    "addDomains": "إضافة نطاقات",
+    "continueWithoutDomains": "المتابعة بدون نطاقات",
+    "generatedDomainsTitle": "هل تريد استخدام نطاقات مجانية؟",
+    "generatedDomainsBody": "ستحصل نقاط الوصول هذه على روابط عامة مجانية. يمكنك اختيار أسمائها قبل التثبيت.",
+    "useGeneratedDomains": "استخدام نطاقات مجانية",
+    "editDomains": "تعديل النطاقات",
+    "routePortCloudDesc": "خاص بمساحة العمل هذه على Cloud. أضف نطاقًا للحصول على رابط عام.",
+    "exposeTitle": "النطاقات والتوجيه"
+  },
   "settingSection": {
     "edit": "تعديل",
     "save": "حفظ",

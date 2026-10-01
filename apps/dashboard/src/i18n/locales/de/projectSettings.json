@@ -1,4 +1,27 @@
 {
+  "appInstall": {
+    "configurationLoading": "App-Konfiguration wird geladen…",
+    "catalogLoadFailed": "Die App-Details konnten nicht geladen werden. Versuche es vor der Installation erneut.",
+    "routingLoadFailed": "Die gespeicherten Routing-Einstellungen konnten nicht geladen werden. Versuche es vor der Installation erneut.",
+    "retryConfiguration": "Erneut versuchen",
+    "hostFitHint": "Du kannst fortfahren. Die Leistung auf diesem Rechner kann eingeschränkt sein.",
+    "cloudFitTitle": "Diese App benötigt einen größeren Cloud-Tarif",
+    "upgradePlan": "Tarif upgraden",
+    "checkingCapacity": "Kapazität wird geprüft…",
+    "checkCapacityAgain": "Erneut prüfen",
+    "cloudFitUnavailable": "Die Kapazität konnte nicht geprüft werden. Sie wird beim Deployment erneut geprüft.",
+    "withoutDomainsTitle": "Ohne Domains fortfahren?",
+    "withoutDomainsBody": "Diese Web-Endpunkte sind nur über ihre veröffentlichten Ports erreichbar. Du kannst später im Projekt Domains hinzufügen.",
+    "withoutDomainsCloudBody": "Diese Web-Endpunkte haben auf Cloud keine öffentliche URL. Andere Dienste dieser App können sie weiterhin erreichen. Du kannst später im Projekt Domains hinzufügen.",
+    "addDomains": "Domains hinzufügen",
+    "continueWithoutDomains": "Ohne Domains fortfahren",
+    "generatedDomainsTitle": "Kostenlose Domains verwenden?",
+    "generatedDomainsBody": "Diese Endpunkte erhalten kostenlose öffentliche URLs. Du kannst die Namen vor der Installation selbst wählen.",
+    "useGeneratedDomains": "Kostenlose Domains nutzen",
+    "editDomains": "Domains bearbeiten",
+    "routePortCloudDesc": "Nur innerhalb dieses Cloud-Workspaces erreichbar. Füge eine Domain für eine öffentliche URL hinzu.",
+    "exposeTitle": "Domains und Routing"
+  },
   "settingSection": {
     "edit": "Bearbeiten",
     "save": "Speichern",

@@ -307,6 +307,7 @@ function runtime() {
 }
 
 let resolvedRuntime: ReturnType<typeof runtime>;
+let resolvedPlatform: Awaited<ReturnType<typeof resolveDeploymentPlatform>>;
 
 function project(overrides: Record<string, unknown> = {}) {
   return {
@@ -449,7 +450,7 @@ describe("single-app prebuilt release-image pipeline", () => {
       executor,
       localHost: true,
     } as never);
-    vi.mocked(resolveDeploymentPlatform).mockResolvedValue({
+    resolvedPlatform = {
       platform: {
         target: "selfhosted",
         runtime: adapter,
@@ -463,8 +464,9 @@ describe("single-app prebuilt release-image pipeline", () => {
       serverId: null,
       hostPortTarget: { targetKey: "local", legacyTargetKeys: [], stable: true },
       runtimeMode: "docker",
-      usesManagedRouting: false,
-    } as never);
+      usesManagedRouting: true,
+    } as never;
+    vi.mocked(resolveDeploymentPlatform).mockResolvedValue(resolvedPlatform);
   });
 
   it.each(["docker", "kubernetes"])("%s pulls the frozen image, skips source builds, and freezes the digest", async (runtimeName) => {
@@ -534,7 +536,7 @@ describe("single-app prebuilt release-image pipeline", () => {
     await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
     await waitForDeploymentQuiescence("deployment-1", "project-1");
     expect(mocks.reportPipelineError).toHaveBeenCalledWith(
-      expect.anything(), expect.stringContaining("Database migration failed"), expect.anything(),
+      expect.anything(), expect.stringContaining("Database migration failed"), expect.anything(), undefined,
     );
     expect(mocks.runReleaseCommand).toHaveBeenCalledOnce();
     expect(mocks.withHostPortTargetLock).not.toHaveBeenCalled();
@@ -590,7 +592,7 @@ describe("single-app prebuilt release-image pipeline", () => {
     await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
     await waitForDeploymentQuiescence("deployment-1", "project-1");
     expect(mocks.reportPipelineError).toHaveBeenCalledWith(
-      expect.anything(), expect.stringContaining("cannot run release commands"), expect.anything(),
+      expect.anything(), expect.stringContaining("cannot run release commands"), expect.anything(), undefined,
     );
     expect(mocks.runDeployPipeline).not.toHaveBeenCalled();
     expect(mocks.deploy).not.toHaveBeenCalled();
@@ -606,7 +608,7 @@ describe("single-app prebuilt release-image pipeline", () => {
     await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
     await waitForDeploymentQuiescence("deployment-1", "project-1");
     expect(mocks.reportPipelineError).toHaveBeenCalledWith(
-      expect.anything(), expect.stringContaining("not supported on multi-service deployments"), expect.anything(),
+      expect.anything(), expect.stringContaining("not supported on multi-service deployments"), expect.anything(), undefined,
     );
     expect(repos.service.syncFromCompose).not.toHaveBeenCalled();
     expect(mocks.runReleaseCommand).not.toHaveBeenCalled();
@@ -620,7 +622,7 @@ describe("single-app prebuilt release-image pipeline", () => {
     await vi.waitFor(() => expect(mocks.reportPipelineError).toHaveBeenCalledOnce());
     await waitForDeploymentQuiescence("deployment-1", "project-1");
     expect(mocks.reportPipelineError).toHaveBeenCalledWith(
-      expect.anything(), expect.stringContaining("Static sites cannot run release commands"), expect.anything(),
+      expect.anything(), expect.stringContaining("Static sites cannot run release commands"), expect.anything(), undefined,
     );
     expect(mocks.runDeployPipeline).not.toHaveBeenCalled();
     expect(mocks.runReleaseCommand).not.toHaveBeenCalled();
@@ -737,7 +739,9 @@ describe("single-app prebuilt release-image pipeline", () => {
       await run();
       await drainDeploymentExecutions();
 
-      expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("deployment-1", "failed");
+      expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("deployment-1", "failed", {
+        errorMessage: "Cache capacity reached; all entries are in use",
+      });
       expect(mocks.updateBuildSession).toHaveBeenCalledWith("build-session-1", { status: "failed" });
       expect(mocks.acknowledgeBuildExecutionFinished).toHaveBeenCalledWith("build-session-1");
       expect(requestDeploymentCancellation("deployment-1")).toBe(false);
@@ -787,6 +791,29 @@ describe("single-app prebuilt release-image pipeline", () => {
     );
     expect(mocks.convergeTargetHostPortClaimsUnlocked.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.onSuccess.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("deploys an unrouted native app without reserving routed host ports or preparing an edge", async () => {
+    resolvedRuntime.name = "bare";
+    resolvedPlatform.platform = { ...resolvedPlatform.platform, target: "desktop" };
+    resolvedPlatform.usesManagedRouting = false;
+    mocks.runDeployPipeline.mockImplementationOnce(async (env, input) => {
+      await env.preflight?.(input.config, async () => "migrate");
+      return { status: "success", ...await env.activate(input.config, () => undefined) };
+    });
+
+    await run(deployment(), { routeStrategy: "loopback-port" });
+    await vi.waitFor(() => expect(mocks.onSuccess).toHaveBeenCalledTimes(1));
+
+    expect(mocks.withHostPortTargetLock).not.toHaveBeenCalled();
+    expect(mocks.ensureRoutingReady).not.toHaveBeenCalled();
+    expect(mocks.prepareTargetPinnedHostPorts).not.toHaveBeenCalled();
+    expect(mocks.allocateAndReservePinnedHostPort).not.toHaveBeenCalled();
+    expect(mocks.reserveTargetPinnedHostPort).not.toHaveBeenCalled();
+    expect(mocks.deploy.mock.calls[0]![0].hostPort).toBeUndefined();
+    expect(mocks.convergeTargetHostPortClaims).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-1", desiredPublishes: [] }),
     );
   });
 

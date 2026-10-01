@@ -1,4 +1,4 @@
-import type { Oblien, WorkspaceHandle } from "oblien";
+import type { Oblien, WorkspaceData, WorkspaceHandle } from "oblien";
 
 import {
   DEFAULT_RESOURCE_CONFIG,
@@ -10,6 +10,7 @@ import type { WorkspaceRuntimePlan } from "../../dockerfile";
 import { sq, type BuildLogger } from "../build-pipeline";
 import { SYSTEM, isValidServiceName, safeErrorMessage } from "@repo/core";
 import { renderServiceDiscoveryScript } from "./service-discovery";
+import { updateCloudWorkspaceResources } from "./workspace-resources";
 import type {
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
@@ -238,10 +239,10 @@ export class CloudComposeSupport {
 
       // A source-built server reuses its build workspace as the runtime, so it
       // must be shrunk from the build tier to its production tier before going
-      // live (mandatory — see shrinkToRuntimeTier). Image services skip this:
-      // createImageServiceWorkspace already sized them at the prod tier.
+      // live. Image services are sized in createImageServiceWorkspace, including
+      // reused hosts whose resource settings changed since their last deploy.
       if (builtArtifact?.workspaceId) {
-        await this.shrinkToRuntimeTier(ws, config, log);
+        await this.applyRuntimeTier(ws, config, log);
       }
 
       await withCloudOperationTimeout(
@@ -418,33 +419,26 @@ export class CloudComposeSupport {
     }
   }
 
-  /**
-   * Shrink a source-built server's workspace from the BUILD tier (4cpu/8GB/10GB)
-   * down to its production/runtime tier. The build workspace is reused as the
-   * runtime, so without this every deployed app holds build-sized resources
-   * permanently and saturates the cloud pool — new builds then fail to place
-   * (CREATE_FAILED).
-   *
-   * Mandatory by design: a resize failure THROWS and fails the deploy. Leaving a
-   * service oversized is not an acceptable escape hatch — it silently poisons the
-   * shared pool. (cpu + memory are the pool/cost constraint; disk isn't in the
-   * deploy config and shrinking a data volume is unreliable, so it's left alone.)
-   */
-  private async shrinkToRuntimeTier(
+  /** Apply CPU/RAM to a built or reused native workspace. Its persistent disk
+   * stays intact, and an unverified resize never reports deployment success. */
+  private async applyRuntimeTier(
     ws: WorkspaceHandle,
     config: MultiServiceDeployConfig,
     log: LogCallback,
+    current?: WorkspaceData,
   ): Promise<void> {
     const cpus = cloudCpus(config.resources?.cpuCores ?? DEFAULT_RESOURCE_CONFIG.cpuCores);
     const memory_mb = config.resources?.memoryMb ?? DEFAULT_RESOURCE_CONFIG.memoryMb;
+    const resources = { cpuCores: cpus, memoryMb: memory_mb };
     try {
       await withCloudOperationTimeout(
-        ws.resources.update({ cpus, memory_mb, apply: true }),
+        updateCloudWorkspaceResources(ws, resources, current),
         `Resizing service "${config.serviceName}" to its runtime tier`,
       );
     } catch (err) {
       throw new Error(
-        `Failed to shrink service "${config.serviceName}" from the build tier to its runtime tier: ${errorMessage(err)}`,
+        `Failed to apply the runtime resources for service "${config.serviceName}": ${errorMessage(err)}`,
+        { cause: err },
       );
     }
     log({
@@ -465,7 +459,12 @@ export class CloudComposeSupport {
     if (config.previousWorkspaceId) {
       try {
         const existing = this.deps.workspace(config.previousWorkspaceId);
-        await existing.get(); // 404s if it was reaped
+        const current = await existing.get(); // 404s if it was reaped
+        if (current.id !== config.previousWorkspaceId ||
+            (this.deps.namespace && current.namespace !== this.deps.namespace)) {
+          throw new Error("Cloud workspace does not belong to this service's namespace");
+        }
+        await this.applyRuntimeTier(existing, config, onLog, current);
         onLog({
           timestamp: now(),
           message: `Reusing existing workspace ${config.previousWorkspaceId} for service "${config.serviceName}" (preserves its disk/data).\n`,
@@ -473,7 +472,7 @@ export class CloudComposeSupport {
         });
         return config.previousWorkspaceId;
       } catch (error) {
-        throw new Error(`Could not verify the existing workspace for "${config.serviceName}". Retry before replacing its data: ${errorMessage(error)}`);
+        throw new Error(`Could not prepare the existing workspace for "${config.serviceName}". Its disk was retained: ${errorMessage(error)}`, { cause: error });
       }
     }
 

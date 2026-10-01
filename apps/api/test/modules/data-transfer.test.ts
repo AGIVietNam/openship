@@ -613,6 +613,19 @@ describe("one-time direct instance transfer", () => {
 });
 
 describe("secret-codec round-trips (extract → seal → decrypt)", () => {
+  it("protects repository grants during transfer with the same cipher as their writer", async () => {
+    const registered = SECRET_COLUMNS.find((entry) => entry.sqlName === "user_settings" && entry.column === "githubAuthorizationEncrypted")!;
+    const grant = JSON.stringify({ accessToken: "repository-access", refreshToken: "repository-refresh", accessExpiresAt: null, refreshExpiresAt: null });
+    const ciphertext = encrypt(grant);
+    const entry = extractPlaintext(registered, "settings", ciphertext);
+    expect(entry?.value).toBe(grant);
+    expect(decrypt(sealForInstance(registered, entry!) as string)).toBe(grant);
+    const { stripEncryptedInPlace } = await import("@repo/db");
+    const tables = { user_settings: [{ id: "settings", userId: "user", githubAuthorizationEncrypted: ciphertext }] };
+    stripEncryptedInPlace(tables);
+    expect(tables.user_settings[0]!.githubAuthorizationEncrypted).toBeNull();
+  });
+
   it.each(["secretEncrypted", "envValueEncrypted"])("transfers cluster database %s with the same cipher as its writer", (column) => {
     const registered = SECRET_COLUMNS.find((entry) => entry.sqlName === "cluster_database" && entry.column === column)!;
     expect(registered.scheme).toBe("scalar");

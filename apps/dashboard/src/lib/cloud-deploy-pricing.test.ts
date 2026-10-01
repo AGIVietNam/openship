@@ -1,9 +1,51 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api/client";
 import type { BillingState } from "./api/billing";
-import { cloudDeployRecovery, cloudDeployRestriction } from "./cloud-deploy-pricing";
+import { cloudDeployRecovery, cloudDeployRestriction, cloudCapacityRestriction, cloudDeployFailure } from "./cloud-deploy-pricing";
 
 describe("Cloud deployment recovery", () => {
+  it.each(["CLOUD_BILLING_BLOCKED", "PLAN_UPGRADE_REQUIRED"])("restores persisted %s failures for app and project deployments", (errorCode) => {
+    expect(cloudDeployRestriction(cloudDeployFailure({ errorCode, errorDetails: { reason: "resource-tier" } })))
+      .toEqual({ code: errorCode, reason: "resource-tier" });
+  });
+  it("requires project identity for capacity recovery and excludes unrelated failures", () => {
+    expect(cloudDeployFailure({ errorCode: "CLOUD_CAPACITY_REQUIRED" })).toBeNull();
+    expect(cloudDeployFailure({ errorCode: "CLOUD_RUNTIME_PROXY_UNAVAILABLE", projectId: "project" })).toBeNull();
+    expect(cloudCapacityRestriction(cloudDeployFailure({ errorCode: "CLOUD_CAPACITY_REQUIRED", errorDetails: { projectId: "project" } })))
+      .toMatchObject({ projectId: "project" });
+  });
+  it("uses delta accounting only when admission verified a reusable workspace", () => {
+    const requested = { cpuCores: 1, memoryMb: 2048, diskMb: 8192 };
+    const refusal = (capacity: unknown) => new ApiError(409, "Conflict", { code: "CLOUD_CAPACITY_REQUIRED", projectId: "project", capacity });
+    expect(cloudCapacityRestriction(refusal({ requested }))).toMatchObject({ requested, reusesWorkspace: false });
+    expect(cloudCapacityRestriction(refusal({ requested, existing: requested }))).toMatchObject({ requested, reusesWorkspace: true });
+    expect(cloudCapacityRestriction(refusal({ requested: { ...requested, cpuCores: NaN } }))?.requested).toBeUndefined();
+    expect(cloudCapacityRestriction(new ApiError(409, "Conflict", { code: "OWNER_LIMIT_REACHED" }))).toBeNull();
+  });
+  it("restores build adjustment alongside a plan upgrade with the actual failure message", () => {
+    const buildResources = { cpuCores: 1, memoryMb: 8192, diskMb: 32768 };
+    const failure = cloudDeployFailure({
+      errorCode: "PLAN_UPGRADE_REQUIRED", projectId: "project",
+      errorMessage: "Build exceeds the workspace memory limit",
+      errorDetails: { reason: "workspace-capacity", capacity: { buildResources } },
+    });
+    expect(cloudCapacityRestriction(failure)).toMatchObject({
+      projectId: "project", buildResources, scope: "workspace", message: "Build exceeds the workspace memory limit",
+    });
+    expect(cloudDeployRestriction(failure)?.code).toBe("PLAN_UPGRADE_REQUIRED");
+  });
+  it("keeps source-build details for pool failures and distinguishes image-only requests", () => {
+    const failure = (buildResources: unknown) => new ApiError(409, "Conflict", {
+      code: "CLOUD_CAPACITY_REQUIRED", projectId: "project", capacity: { buildResources },
+    });
+    expect(cloudCapacityRestriction(failure(null))).toMatchObject({ buildResources: null, scope: "pool" });
+    expect(cloudCapacityRestriction(failure({ cpuCores: 0.25, memoryMb: 512, diskMb: 8192 }))?.buildResources)
+      .toEqual({ cpuCores: 0.25, memoryMb: 512, diskMb: 8192 });
+    expect(cloudCapacityRestriction(failure({ cpuCores: 0, memoryMb: 512, diskMb: 8192 }))?.buildResources).toBeUndefined();
+    expect(cloudCapacityRestriction(new ApiError(402, "Plan required", {
+      code: "PLAN_UPGRADE_REQUIRED", projectId: "project", capacity: { buildResources: null },
+    }))).toBeNull();
+  });
   it.each(["CLOUD_BILLING_BLOCKED", "PLAN_UPGRADE_REQUIRED"])("recognizes the explicit %s refusal", (code) => {
     expect(cloudDeployRestriction(new ApiError(402, "Payment Required", { code, reason: "build-minutes-exhausted" })))
       .toEqual({ code, reason: "build-minutes-exhausted" });

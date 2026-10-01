@@ -230,18 +230,19 @@ const speedTest = await ship.servers.verifyNetwork({
 Speed tests first check connectivity, then transfer at most 32 MiB or for three
 seconds per direction. `report.throughput` records receiver-confirmed bytes,
 elapsed time, and Mbps, or a specific transfer error. Ordinary verification does
-not send bulk traffic. Both servers must belong to the cluster; a different test
+not send bulk traffic. Both servers must belong to the private network; a different test
 cannot start while a verification is active. Repeating an active request for the
 same pair reuses its run. Progress and final results use the same SSE stream.
 
-Cluster reads require fleet-wide server read access. Management requires
-fleet-wide server admin access, with each member also authorized. Removing a
-native cluster removes its inventory records; servers and externally managed
-networks remain. Managed networks use the reviewed cleanup flow below. A member
-must leave its cluster and settle any operation before its server entry can be
-removed. Clusters are not yet deployment targets. Provider API/VLAN provisioning,
-private service endpoints, placement/replicas, and shared storage remain separate
-capabilities.
+Network reads require fleet-wide server read access. Management requires
+fleet-wide server admin access, with each member also authorized. Removing an
+adopted private network removes OpenShip's inventory records; servers and the
+externally managed network remain. Managed networks use the reviewed cleanup
+flow below. Membership and active operations must be settled before removing a
+server. A private network connects hosts; a [compute cluster](#compute-clusters)
+with a ready runtime can run [application replicas and databases](/docs/api/projects#scale-a-stateless-application-on-a-cluster).
+[Shared storage](#share-files-across-servers) is enabled separately. Provider
+API/VLAN provisioning remains outside the managed-network setup.
 
 ### Managed private networks
 

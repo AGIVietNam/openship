@@ -70,6 +70,6 @@
   },
   "private": true,
   "patchedDependencies": {
-    "oblien@2.4.0": "packages/adapters/patches/oblien@2.4.0.patch"
+    "oblien@2.5.0": "packages/adapters/patches/oblien@2.5.0.patch"
   }
 }

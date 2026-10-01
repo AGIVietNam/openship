@@ -14,6 +14,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/components/i18n-provider";
 import { BUILD_SESSION_ERROR_FALLBACK } from "@/context/deployment/load-session";
 import { ResourceNotFound } from "@/components/resource-not-found";
+import { useCloudDeployPricing } from "@/hooks/useCloudDeployPricing";
+import { cloudDeployFailure } from "@/lib/cloud-deploy-pricing";
 
 const BuildPage: React.FC = () => {
   const params = useParams();
@@ -23,6 +25,7 @@ const BuildPage: React.FC = () => {
   const deploymentId = params.id as string;
   const { state, config, connectToBuild, loadBuildSession, redeploy, maybeOpenCredentialModal } = useDeployment();
   const { t } = useI18n();
+  const showCloudPricing = useCloudDeployPricing();
   const initializedDeploymentRef = useRef<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   /** Load failure that is NOT a missing deployment — a hydration exception,
@@ -151,12 +154,17 @@ const BuildPage: React.FC = () => {
     // an auto-redeploy on the user's fix.
     const key = `${deploymentId}:${state.errorCode}`;
     if (shownModalRef.current === key) return;
+    const cloudFailure = cloudDeployFailure(state);
+    if (cloudFailure && showCloudPricing(cloudFailure, handleRedeploy)) {
+      shownModalRef.current = key;
+      return;
+    }
     const opened = maybeOpenCredentialModal(state.errorCode, {
       trigger: "build-fail",
       onResolved: () => void handleRedeploy(),
     });
     if (opened) shownModalRef.current = key;
-  }, [state.deploymentFailed, state.errorCode, deploymentId, maybeOpenCredentialModal, handleRedeploy]);
+  }, [state.deploymentFailed, state.errorCode, state.errorDetails, state.projectId, deploymentId, maybeOpenCredentialModal, handleRedeploy, showCloudPricing]);
 
   if (loadError) {
     return (

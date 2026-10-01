@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/components/i18n-provider";
@@ -10,13 +10,14 @@ import { useIssueCounts } from "@/hooks/useIssueCounts";
 import { Sidebar } from "./sidebar";
 
 const mocks = vi.hoisted(() => ({
+  pathname: "/monitoring",
   summary: vi.fn(),
   feed: vi.fn(),
   organization: vi.fn(),
   projects: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/monitoring",
+  usePathname: () => mocks.pathname,
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn() }),
 }));
@@ -62,6 +63,7 @@ let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.pathname = "/monitoring";
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.organization.mockResolvedValue({ data: { id: "org-a" } });
@@ -79,17 +81,87 @@ afterEach(async () => {
   vi.useRealTimers();
   setActiveOrganizationId(null);
 });
-async function render() {
+async function render(props: ComponentProps<typeof Sidebar> = {}) {
   await act(async () =>
     root.render(
       <I18nProvider>
-        <Sidebar />
+        <Sidebar {...props} />
       </I18nProvider>,
     ),
   );
 }
 const monitoring = () => host.querySelector<HTMLAnchorElement>('a[href="/monitoring"]')!;
 const badge = () => monitoring().querySelector(".tabular-nums");
+const sidebarToggle = () => host.querySelector<HTMLButtonElement>(
+  'button[aria-controls="dashboard-sidebar"]',
+)!;
+
+async function navigate(pathname: string) {
+  mocks.pathname = pathname;
+  await render();
+}
+
+describe("Sidebar collapse", () => {
+  it.each([
+    ["/billing/plans", false],
+    ["/billing/overview", true],
+    ["/billing/usage", true],
+  ])("opens %s with sidebar expanded=%s on direct entry", async (pathname, expanded) => {
+    await navigate(pathname);
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe(String(expanded));
+  });
+
+  it("temporarily collapses when opening plans from Home and starts each visit compact", async () => {
+    await navigate("/");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await navigate("/billing/plans");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => sidebarToggle().click());
+    await render();
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await navigate("/billing/overview");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await navigate("/billing/plans");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("restores a collapsed preference after manually expanding plans", async () => {
+    await navigate("/");
+    await act(async () => sidebarToggle().click());
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await navigate("/billing/plans");
+    await act(async () => sidebarToggle().click());
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await navigate("/projects");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps temporary expansion separate between Scale and plans", async () => {
+    await navigate("/scale");
+    await act(async () => sidebarToggle().click());
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await navigate("/billing/plans");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => sidebarToggle().click());
+    await navigate("/scale");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await navigate("/");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens the mobile drawer fully without changing the desktop preference", async () => {
+    await navigate("/billing/plans");
+    const onCloseMobile = vi.fn();
+    await render({ mobileOpen: true, onCloseMobile });
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => sidebarToggle().click());
+    expect(onCloseMobile).toHaveBeenCalledOnce();
+    await render();
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await navigate("/");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+  });
+});
 
 describe("Monitoring sidebar count", () => {
   it("keeps the distinct project total alongside actionable issues, excluding updates", async () => {
@@ -101,10 +173,7 @@ describe("Monitoring sidebar count", () => {
     expect(host.querySelector('a[href="/projects"] .tabular-nums')?.textContent).toBe("2");
     expect(badge()?.textContent).toBe("3");
     expect(monitoring().textContent).toContain(baseDictionary.dashboard.nav.issues);
-    const collapse = host.querySelector<HTMLButtonElement>(
-      'button[aria-controls="dashboard-sidebar"]',
-    )!;
-    await act(async () => collapse.click());
+    await act(async () => sidebarToggle().click());
     expect(monitoring().getAttribute("aria-label")).toBe("Monitoring: 3 issues");
     expect(badge()).toBeNull();
   });

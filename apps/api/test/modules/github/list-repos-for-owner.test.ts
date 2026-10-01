@@ -89,17 +89,17 @@ beforeEach(() => {
 
 describe("listReposForOwner — source dispatch", () => {
   describe("user-token (oauth/cli/token mode)", () => {
-    it("lists org repos via /orgs/{owner}/repos when owner is not the user", async () => {
+    it("filters accessible user repositories for an organization or collaborator owner", async () => {
       resolveGitHubAuthMode.mockResolvedValue("oauth");
       getUserStatus.mockResolvedValue({ connected: true, login: "me" });
-      githubFetch.mockResolvedValue([raw("acme/site")]);
+      githubFetch.mockResolvedValue([raw("acme/site"), raw("another/repo")]);
 
       const repos = await call("acme");
 
       expect(repos).toHaveLength(1);
       expect(repos?.[0].full_name).toBe("acme/site");
       expect(githubFetch).toHaveBeenCalledWith(
-        expect.objectContaining({ url: expect.stringContaining("/orgs/acme/repos") }),
+        expect.objectContaining({ url: "https://api.github.com/user/repos", credential: ["user-oauth"] }),
       );
     });
 

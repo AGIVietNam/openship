@@ -58,7 +58,7 @@ export {
 
 export { BUILD_STEPS } from "./types";
 
-export { DEFAULT_RESOURCE_CONFIG, DEFAULT_BUILD_RESOURCE_CONFIG } from "./types";
+export { cloudCpus, DEFAULT_RESOURCE_CONFIG, DEFAULT_BUILD_RESOURCE_CONFIG } from "./types";
 
 // ─── Runtime layer ───────────────────────────────────────────────────────────
 export type {
@@ -124,6 +124,7 @@ export {
   type CloudDockerOptions,
 } from "./runtime/cloud/docker";
 export { cloudWorkspaceStatus, waitForCloudDockerWorkspace } from "./runtime/cloud/workspace-ready";
+export { updateCloudWorkspaceResources } from "./runtime/cloud/workspace-resources";
 export { CloudWorkspaceExecutor } from "./runtime/cloud/workspace-executor";
 export { BuildLogger } from "./runtime/build-pipeline";
 export {
@@ -577,7 +578,7 @@ export {
 } from "./platform";
 
 // ─── Oblien SDK (re-export for single source of truth) ───────────────────────
-export { Oblien } from "./oblien";
+export { Oblien, cloudWorkspaceCreationFailure } from "./oblien";
 export type {
   NamespaceUsageUnits,
   NamespaceUsageUnitBucket,

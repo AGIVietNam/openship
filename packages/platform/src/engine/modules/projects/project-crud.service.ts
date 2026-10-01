@@ -75,7 +75,7 @@ import {
   type ProjectRouteState,
 } from "../domains/project-route.service";
 import { applyProjectRouting } from "../domains/routing-apply.service";
-import { syncProjectManagedEdge } from "./project-runtime.service";
+import { markRoutingWarning, syncProjectManagedEdge } from "./project-runtime.service";
 import { normalizeStoredPublicEndpoints, publicEndpointHostname } from "../../lib/public-endpoints";
 import { resolveDeploymentEnvironment } from "../deployments/deployment-environment";
 import { assertFreeEndpointsAllowed } from "../../lib/free-domain-guard";
@@ -306,6 +306,7 @@ export async function enrichProject(p: Project) {
     // tier on cloud, NO limits self-hosted (the machine is the cap).
     resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000, {
       isCloud: deployTarget === "cloud",
+      automaticBuild: deployTarget === "cloud" && env.CLOUD_MODE,
     }),
   };
 }
@@ -379,6 +380,7 @@ export async function enrichProjectsBatch(
       // free tier on cloud, NO limits self-hosted (the machine is the cap).
       resources: encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000, {
         isCloud: deployTarget === "cloud",
+        automaticBuild: deployTarget === "cloud" && env.CLOUD_MODE,
       }),
     };
   });
@@ -1669,19 +1671,25 @@ async function reapplyCompleteProjectRouting(
   previousHostnames: string[],
   options?: Parameters<typeof reapplyProjectLiveRoutes>[2],
 ) {
-  const projectRoutes = options
-    ? reapplyProjectLiveRoutes(project, previousHostnames, options)
-    : reapplyProjectLiveRoutes(project, previousHostnames);
-  await projectRoutes.catch((err) =>
-    console.warn(
-      `[updateProject] project route re-apply failed (non-fatal, applies next deploy): ${safeErrorMessage(err)}`,
-    ),
-  );
-  await applyProjectRouting(project.id).catch((err) =>
-    console.warn(
-      `[updateProject] service/topology route re-apply failed (non-fatal, applies next deploy): ${safeErrorMessage(err)}`,
-    ),
-  );
+  const warnings: string[] = [];
+  const onWarning = (message: string) => {
+    if (!warnings.includes(message)) warnings.push(message);
+    options?.onWarning?.(message);
+  };
+  await reapplyProjectLiveRoutes(project, previousHostnames, { ...options, onWarning }).catch((err) => {
+    const message = safeErrorMessage(err);
+    console.warn(`[updateProject] project route re-apply failed: ${message}`);
+    onWarning(message);
+  });
+  await applyProjectRouting(project.id, { onWarning }).catch((err) => {
+    const message = safeErrorMessage(err);
+    console.warn(`[updateProject] service/topology route re-apply failed: ${message}`);
+    onWarning(message);
+  });
+  if (warnings.length) {
+    await markRoutingWarning((await findActiveDeployment(project)) ?? null, warnings.join("\n"));
+  }
+  return warnings;
 }
 
 export async function updateProject(
@@ -1891,7 +1899,7 @@ export async function updateProject(
       // covers every managed hostname on the project, including the ones added by
       // this edit. Letting the re-apply sync them too raced its own follow-up —
       // two challenges for one target, the second resetting the first's token.
-      await reapplyCompleteProjectRouting(refreshed, previousHostnames, {
+      const routeWarnings = await reapplyCompleteProjectRouting(refreshed, previousHostnames, {
         managedEdgeSyncedByCaller: true,
       });
       // A free (*.opsh.io) domain resolves only through Openship Cloud's edge.
@@ -1904,6 +1912,7 @@ export async function updateProject(
       if (refreshed.activeDeploymentId) {
         await syncProjectManagedEdge(refreshed, organizationId, {
           markOnFailure: true,
+          clearOnSuccess: routeWarnings.length === 0,
         }).catch((err) =>
           console.warn(
             `[updateProject] managed edge sync failed (non-fatal): ${safeErrorMessage(err)}`,

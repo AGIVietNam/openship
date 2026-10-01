@@ -1689,7 +1689,7 @@
     "apps.hostFit": {
       "page": "apps",
       "section": "Operations",
-      "description": "Check template requirements against a destination.",
+      "description": "Preview host recommendations or Cloud plan fit, including an optional draft's saved resources.",
       "route": "GET /api/apps/catalog/:id/host-fit"
     },
     "apps.removeCustom": {
@@ -1866,6 +1866,24 @@
       "description": "Read compute usage, edge traffic, and bandwidth limits.",
       "route": "GET /api/billing/resources"
     },
+    "billing.getCapacity": {
+      "page": "billing",
+      "section": "Operations",
+      "description": "Read verified Cloud pool and authorized project allocations.",
+      "route": "GET /api/billing/capacity"
+    },
+    "billing.previewCapacity": {
+      "page": "billing",
+      "section": "Operations",
+      "description": "Preview resource changes and affected restarts without applying them.",
+      "route": "POST /api/billing/capacity/preview"
+    },
+    "billing.applyCapacity": {
+      "page": "billing",
+      "section": "Operations",
+      "description": "Apply a confirmed resource adjustment through the deployment queue.",
+      "route": "POST /api/billing/capacity/apply"
+    },
     "billing.getSubscription": {
       "page": "billing",
       "section": "Operations",
@@ -1941,7 +1959,7 @@
     "github.connect": {
       "page": "github",
       "section": "Connect",
-      "description": "Start a supported GitHub connection flow.",
+      "description": "Start GitHub authorization or select an accessible App installation. Repository access is separate from Cloud sign-in.",
       "route": "POST /api/github/connect"
     },
     "github.claimInstallation": {
@@ -1959,7 +1977,7 @@
     "github.pollConnect": {
       "page": "github",
       "section": "Connect",
-      "description": "Poll an in-progress connection flow.",
+      "description": "Poll the returned state for one connection attempt, or omit state for a self-hosted device flow.",
       "route": "GET /api/github/connect/poll"
     },
     "github.setInstanceToken": {
@@ -2690,9 +2708,37 @@
     }
   },
   "http": {
+    "POST /api/cloud/support": {
+      "page": "support",
+      "description": "Save a Cloud support ticket and queue acknowledgement and team email. Public intake returns only a receipt and deduplicates retries."
+    },
+    "GET /api/cloud/support/tickets": {
+      "page": "support",
+      "description": "List Cloud support tickets with status filtering and cursor pagination. Requires internal operator authority."
+    },
+    "GET /api/cloud/support/tickets/:id": {
+      "page": "support",
+      "description": "Read a Cloud ticket, its replies, and email delivery attempts. Requires internal operator authority."
+    },
+    "PATCH /api/cloud/support/tickets/:id": {
+      "page": "support",
+      "description": "Open or resolve a Cloud support ticket. Requires internal operator authority."
+    },
+    "POST /api/cloud/support/tickets/:id/replies": {
+      "page": "support",
+      "description": "Save and queue an idempotent support reply, optionally resolving the ticket in the same transaction. Requires internal operator authority."
+    },
+    "POST /api/cloud/support/tickets/:id/retry": {
+      "page": "support",
+      "description": "Retry undelivered support email while preserving active delivery leases and already accepted messages. Requires internal operator authority."
+    },
     "GET /api/auth/*": {
       "page": "auth",
       "description": "Handle browser sessions and authentication through Better Auth."
+    },
+    "GET /api/auth/callback/github": {
+      "page": "auth",
+      "description": "Complete a browser-bound Cloud repository authorization; ordinary GitHub sign-in callbacks remain handled by Better Auth."
     },
     "POST /api/auth/*": {
       "page": "auth",
@@ -2782,6 +2828,10 @@
       "page": "cloud",
       "description": "Proxy Oblien analytics for a hostname in the caller's namespace."
     },
+    "POST /api/cloud/telemetry": {
+      "page": "cloud",
+      "description": "Capture optional hosted dashboard product events with exact-origin and verified cookie identity checks."
+    },
     "POST /api/cloud/connect-authorize": {
       "page": "cloud",
       "description": "Consent page mints a one-time handoff code (cookie session checked inline)."
@@ -2832,11 +2882,11 @@
     },
     "GET /api/cloud/github/install-callback": {
       "page": "cloud",
-      "description": "GitHub install callback — atomically claim a durable user/workspace nonce after matching user-token and Openship App-JWT verification."
+      "description": "Select an existing GitHub installation with flow=select, or atomically claim the workspace-bound attempt after GitHub user-token and App-JWT verification."
     },
     "POST /api/cloud/github/install-url": {
       "page": "cloud",
-      "description": "Build the App install URL with a one-time state token."
+      "description": "Build an Openship installation-selection URL with a one-time workspace state; existing installations can reconnect without another GitHub setup callback."
     },
     "POST /api/cloud/github/installation-token": {
       "page": "cloud",

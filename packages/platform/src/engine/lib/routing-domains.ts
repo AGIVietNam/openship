@@ -666,7 +666,8 @@ export function createTrackedSslProvider(
       // stale database row or failed SSH read must not imply an HTTP-only site.
       // This read serves progress reporting; it never changes persisted state
       // or prevents the existing issuance/recovery path from running.
-      const dnsChallenge = host.startsWith("*.") || domainRecord?.sslChallenge === "dns-01";
+      const dnsChallenge = ssl.certificateManagement !== "provider" &&
+        (host.startsWith("*.") || domainRecord?.sslChallenge === "dns-01");
       const onDisk = log || dnsChallenge ? await ssl.verifyCert(host).catch(() => null) : null;
       const noCertYet = onDisk?.reason === "missing";
       log?.(noCertYet
@@ -769,6 +770,7 @@ export function createTrackedSslProvider(
 
   return {
     provisionCert,
+    ...(ssl.certificateManagement ? { certificateManagement: ssl.certificateManagement } : {}),
     ...(ssl.dnsChallengeProvider ? { dnsChallengeProvider: () => ssl.dnsChallengeProvider!() } : {}),
     ...(ssl.activateCert ? { activateCert: (hostname: string) => ssl.activateCert!(hostname) } : {}),
     renewCert: async (hostname: string) => persist(hostname, await ssl.renewCert(hostname)),

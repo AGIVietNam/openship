@@ -22,6 +22,7 @@ import { assertResourceInOrg } from "../../lib/resource-access";
 import { getHostCapacity } from "../../lib/host-capacity";
 import { resolveSnapshotTarget } from "../deployments/build.service";
 import type { TUpdateResourcesBody } from "@repo/contracts";
+import { env } from "../../config/env";
 
 // ─── Target + capacity ───────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ export async function getResources(projectId: string, organizationId: string) {
   return encodeResources(production, build, p.sleepMode ?? "auto_sleep", p.port ?? 3000, {
     isCloud,
     capacity,
+    automaticBuild: isCloud && env.CLOUD_MODE,
   });
 }
 
@@ -112,6 +114,8 @@ export async function updateResources(
     const build = data.build ? resolveIncoming(data.build) : null;
     if (build) {
       update.buildResources = decodeResources(build, decodeOpts);
+    } else if (data.build === null) {
+      update.buildResources = null;
     }
   } catch (err) {
     // decodeResources throws plain Errors for out-of-range/over-capacity input;

@@ -560,10 +560,14 @@ export function createDnsHookScripts(manager: MatchedDnsManager): DnsHookScripts
 set -e
 DOMAIN="\${CERTBOT_DOMAIN#\\*.}"
 RECORD_NAME="_acme-challenge.\${DOMAIN}"
+case "$DOMAIN" in ''|*[!A-Za-z0-9.-]*) echo "Invalid ACME domain" >&2; exit 1;; esac
+case "$CERTBOT_VALIDATION" in ''|*[!A-Za-z0-9_-]*) echo "Invalid ACME validation value" >&2; exit 1;; esac
+DNS_PAYLOAD=$(printf '%s' '{"type":"TXT","name":"' "$RECORD_NAME" \\
+  '","content":"\\"' "$CERTBOT_VALIDATION" '\\"","ttl":60,"comment":"Managed by Openship"}')
 RES=$(curl -s -S --connect-timeout 5 --max-time 15 -X POST "https://api.cloudflare.com/client/v4/zones/${manager.zone.id}/dns_records" \\
   -H "Authorization: Bearer ${manager.credentials.apiToken}" \\
   -H "Content-Type: application/json" \\
-  --data "{\\"type\\":\\"TXT\\",\\"name\\":\\"\${RECORD_NAME}\\",\\"content\\":\\"\${CERTBOT_VALIDATION}\\",\\"ttl\\":60,\\"comment\\":\\"Managed by Openship\\"}")
+  --data "$DNS_PAYLOAD")
 if ! echo "$RES" | grep -q '"success":true'; then
   echo "Cloudflare rejected the ACME TXT record request" >&2
   echo "$RES" >&2
@@ -767,10 +771,10 @@ async function manageAuthorizedDomainSsl(
       return result;
     }
 
-    const isDns =
+    const isDns = ssl.certificateManagement !== "provider" && (
       opts.challenge === "dns-01" ||
       domainRecord.sslChallenge === "dns-01" ||
-      isWildcardHostname(domainRecord.hostname);
+      isWildcardHostname(domainRecord.hostname));
 
     try {
       const result = await createProvisionLock(sslIssueLockKey(domainRecord.hostname)).run(async () => {
@@ -782,7 +786,8 @@ async function manageAuthorizedDomainSsl(
         const provOpts: ProvisionCertOptions = {
           ...(opts.onLog ? { onLog: opts.onLog } : {}),
           force: true,
-          ...(isDns ? { challenge: "dns-01" } : opts.challenge ? { challenge: opts.challenge } : {}),
+          ...(ssl.certificateManagement === "provider" ? {} :
+            isDns ? { challenge: "dns-01" } : opts.challenge ? { challenge: opts.challenge } : {}),
           ...dnsHooks,
         };
         return createProvisionLock(acmeIssueLockKey(lockScope)).run(() =>
@@ -843,10 +848,10 @@ async function provisionAuthorizedDomainCert(
   },
 ): Promise<SslResult> {
   return withSslProvider(owner, async ({ ssl, lockScope }) => {
-    const isDns =
+    const isDns = ssl.certificateManagement !== "provider" && (
       opts.challenge === "dns-01" ||
       domainRecord.sslChallenge === "dns-01" ||
-      isWildcardHostname(domainRecord.hostname);
+      isWildcardHostname(domainRecord.hostname));
 
     // Serialize issuance per-hostname, and re-check the cert INSIDE the lock.
     // This closes the TOCTOU: two concurrent Verify hits (or Verify racing the
@@ -888,7 +893,7 @@ async function provisionAuthorizedDomainCert(
             ssl.provisionCert(domainRecord.hostname, {
               onLog: opts.onLog,
               force: true,
-              challenge: isDns ? "dns-01" : "http-01",
+              ...(ssl.certificateManagement === "provider" ? {} : { challenge: isDns ? "dns-01" as const : "http-01" as const }),
               ...dnsHooks,
             }),
           );

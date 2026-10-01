@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { BillingState } from "@/lib/api/billing";
 import { PlanResources } from "./PlanResources";
+import { PlanUsageNote } from "./PlanUsageNote";
 import { useCloudCheckout, useCloudPlans } from "./useCloudBilling";
 
 /** The first useful action for a workspace with no paid Cloud subscription. */
@@ -52,6 +53,7 @@ export function CloudPlanOffer({ state }: { state: BillingState }) {
       <Link href="/billing/plans" className="mt-4 flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border/60 px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/40">
         {copy.compare}<UiIcon name="arrow-right" className="size-3.5 rtl:rotate-180" aria-hidden="true" />
       </Link>
+      {plan && <div className="mt-5"><PlanUsageNote plans={[plan]} /></div>}
     </div>
   </section>;
 }

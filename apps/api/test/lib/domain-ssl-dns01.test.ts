@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Domain } from "@repo/db";
 import type { SslProvider } from "@repo/adapters";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const h = vi.hoisted(() => ({
+  certificateManagement: undefined as "provider" | undefined,
   domains: new Map<string, Record<string, unknown>>(),
   updateSsl: vi.fn(),
   recordSslFailure: vi.fn(),
@@ -76,6 +81,7 @@ vi.mock("@repo/platform/engine/lib/deployment-runtime", () => ({
   resolveDeploymentPlatform: vi.fn(async () => ({
     platform: {
       ssl: {
+        get certificateManagement() { return h.certificateManagement; },
         provisionCert: h.provisionCert,
         renewCert: h.renewCert,
         verifyCert: h.verifyCert,
@@ -111,6 +117,7 @@ function domain(hostname: string, extra: Record<string, unknown> = {}) {
 
 describe("DNS-01 ACME challenge support in domain-ssl", () => {
   beforeEach(() => {
+    h.certificateManagement = undefined;
     h.domains.clear();
     h.updateSsl.mockClear();
     h.recordSslFailure.mockClear();
@@ -153,6 +160,63 @@ describe("DNS-01 ACME challenge support in domain-ssl", () => {
     expect(calledOpts.challenge).toBe("dns-01");
     expect(calledOpts.dnsAuthHookScript).toContain("cloudflare.com/client/v4");
     expect(calledOpts.dnsCleanupHookScript).toContain("DELETE");
+  });
+
+  it.each(["provision", "renew"] as const)("lets Cloud manage %s without resolving local DNS credentials", async (action) => {
+    h.certificateManagement = "provider";
+    h.dnsManagerResult = { status: "none" } as unknown as typeof h.dnsManagerResult;
+    domain("app.example.com", { sslChallenge: "dns-01", sslDnsMode: "manual" });
+    const result = await manageDomainSsl("app.example.com", { action, challenge: "dns-01" });
+    expect(result.verified).toBe(true);
+    const calls = action === "provision" ? h.provisionCert.mock.calls : h.renewCert.mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1] ?? {}).not.toHaveProperty("dnsAuthHookScript");
+    expect(calls[0]?.[1] ?? {}).not.toHaveProperty("challenge");
+  });
+
+  it("preserves provider-managed certificates through the deployment wrapper", async () => {
+    const host = "app.example.com";
+    domain(host, { verified: false, sslChallenge: "dns-01" });
+    h.dnsManagerResult = { status: "none" } as unknown as typeof h.dnsManagerResult;
+    const selected: SslProvider = {
+      certificateManagement: "provider",
+      provisionCert: h.provisionCert, verifyCert: h.verifyCert,
+      renewCert: h.renewCert, installCert: vi.fn(),
+    };
+    const tracked = createTrackedSslProvider(selected, new Map([[host, h.domains.get(host) as unknown as Domain]]));
+    expect(tracked.certificateManagement).toBe("provider");
+    expect(await tracked.provisionCert(host)).toMatchObject({ verified: true });
+    expect(h.provisionCert).toHaveBeenCalledExactlyOnceWith(host);
+    expect(h.markVerifiedActive).toHaveBeenCalledWith(`dom_${host}`, expect.objectContaining({ sslStatus: "active" }));
+  });
+
+  it("the generated ACME shell hook sends quoted TXT content as valid JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openship-dns-hook-"));
+    try {
+      const hooks = createDnsHookScripts(h.dnsManagerResult.manager as never);
+      const auth = join(dir, "auth.sh");
+      const payload = join(dir, "payload.json");
+      writeFileSync(auth, hooks.authHookScript);
+      writeFileSync(join(dir, "curl"), `#!/usr/bin/env python3
+import json, os, sys
+if '--data' in sys.argv:
+    value = sys.argv[sys.argv.index('--data') + 1]
+    json.loads(value)
+    open(os.environ['CAPTURE_PAYLOAD'], 'w').write(value)
+    print('{"success":true,"result":{"id":"record_123"}}')
+else:
+    print(json.dumps({'Answer': [{'type':16, 'data': '"test_validation"'}]}))
+`, { mode: 0o700 });
+      execFileSync("/bin/sh", [auth], { timeout: 5000, env: {
+        ...process.env, PATH: `${dir}:/usr/bin:/bin`, CAPTURE_PAYLOAD: payload,
+        CERTBOT_DOMAIN: "app.example.com", CERTBOT_VALIDATION: "test_validation",
+        OPENSHIP_DNS_RECORD_FILE: join(dir, "record-id"),
+      } });
+      expect(JSON.parse(readFileSync(payload, "utf8"))).toMatchObject({
+        type: "TXT", name: "_acme-challenge.app.example.com", content: '"test_validation"',
+      });
+      expect(readFileSync(join(dir, "record-id"), "utf8").trim()).toBe("record_123");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("reuses a valid wildcard certificate without requiring DNS credentials for a new order", async () => {

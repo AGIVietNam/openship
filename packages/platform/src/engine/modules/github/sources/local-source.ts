@@ -16,7 +16,7 @@
  * round-trip and is merged to label App-covered repos correctly.
  *
  * Constructed only in non-CLOUD_MODE (see ./index.ts). The SaaS uses
- * GitHubAppSource directly.
+ * GitHubAppSource instead. The factory supplements either with an enabled PAT.
  */
 
 import { listUserOwnedRepos } from "@repo/platform/engine/modules/github/github.service";
@@ -45,6 +45,7 @@ import type {
   GitHubUserStatus,
 } from "@repo/platform/engine/modules/github/sources/types";
 import { hasActiveGitHubSource } from "@repo/platform/engine/modules/github/github-source.service";
+import { mergeRepositorySources } from "./mappers";
 
 /**
  * THE one place a gh probe result becomes wire state.
@@ -74,23 +75,6 @@ function ghCliState(status: GhCliStatus): GitHubConnectionState["sources"]["ghCl
     ...(status.problem ? { problem: status.problem } : {}),
     checkedAt: status.checkedAt,
   };
-}
-
-/** Merge one repo list without duplicating App/CLI-visible repositories. */
-function mergeRepoSources(
-  appRepos: MappedRepository[],
-  cliRepos: MappedRepository[],
-): MappedRepository[] {
-  const merged = new Map<string, MappedRepository>();
-  for (const repo of cliRepos) {
-    merged.set(repo.full_name.toLowerCase(), { ...repo, source: "cli" });
-  }
-  for (const repo of appRepos) {
-    const key = repo.full_name.toLowerCase();
-    const prior = merged.get(key);
-    merged.set(key, { ...repo, source: prior ? "both" : "app" });
-  }
-  return [...merged.values()];
 }
 
 export class LocalGitHubSource implements GitHubSource {
@@ -140,16 +124,16 @@ export class LocalGitHubSource implements GitHubSource {
         this.gh.listReposForOwner(owner),
         app?.listReposForOwner(owner) ?? Promise.resolve(null),
       ]);
-      return mergeRepoSources(appRepos ?? [], cliRepos);
+      return mergeRepositorySources(cliRepos, appRepos ?? []);
     }
     if (ghAvailable && this.gh) return this.gh.listReposForOwner(owner);
     const app = await this.app();
     if (app) return app.listReposForOwner(owner);
-    // user-token (OAuth/PAT): the user's OWN account must go to /user/repos —
-    // /orgs/{me}/repos 404s for a user account.
+    // Personal tokens are composed by the factory. The remaining fallback is
+    // the user's OAuth grant; /user/repos also includes collaborator owners.
     const status = await getUserStatus(this.ctx.userId, this.ctx);
-    const isOwn = !!owner && status.connected && owner === status.login;
-    return listUserOwnedRepos(this.ctx, isOwn ? undefined : owner);
+    if (!status.connected) return null;
+    return listUserOwnedRepos(this.ctx, owner);
   }
 
   async getHome(): Promise<GitHubHome> {
@@ -185,7 +169,7 @@ export class LocalGitHubSource implements GitHubSource {
             ...appHome.accounts,
             ...cliAccounts.filter((a) => !appAccounts.has(a.login.toLowerCase())),
           ],
-          repos: mergeRepoSources(appHome.repos, cliRepos),
+          repos: mergeRepositorySources(cliRepos, appHome.repos),
           errors: appHome.errors,
         };
       }
@@ -215,8 +199,7 @@ export class LocalGitHubSource implements GitHubSource {
       };
     }
 
-    // Neither → user-token (OAuth/PAT) home, or the empty shell when nothing
-    // is connected at all.
+    // Neither → OAuth home, or the empty shell. The factory adds personal tokens.
     const state = await getGitHubConnectionState(this.ctx);
     if (this.gh) {
       state.sources.ghCli = ghCliState(ghStatus);

@@ -104,6 +104,9 @@ export interface ProvisionCertOptions {
 }
 
 export interface SslProvider {
+  /** The provider handles issuance and renewal through its own API. DNS
+   * credentials and local Certbot hook scripts must not be required or sent. */
+  readonly certificateManagement?: "provider";
   /** Resumable DNS-01 orders. Waiting for a person must not hold an executor,
    * Certbot process, or deployment lock. Returned order material is private. */
   dnsChallengeProvider?(): Promise<DnsCertificateProvider>;

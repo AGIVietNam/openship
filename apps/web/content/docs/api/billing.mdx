@@ -76,7 +76,7 @@ Two conventions matter when you render this:
 
 Prices, credits, packs and limits come from Openship's server catalog in
 `@repo/core`. The API, dashboard and [pricing page](/pricing) read the same
-published catalog. Monthly paid plans are $10 / $39 / $99; annual checkout is
+published catalog. Monthly paid plans are $5 / $20 / $39 / $99; annual checkout is
 hidden until explicit yearly terms are published. Linked local installations
 read the SaaS public catalog without sending local credentials.
 
@@ -93,13 +93,13 @@ do not change existing customers' terms. Grace defaults to zero and can be
 configured in the catalog. Credits are independent of USD price and are not a
 promise of fixed CPU minutes.
 
-Workspace count is a namespace allowance; CPU, RAM and disk caps apply to each
-VM. Openship submits `billing.resourceLimits` directly from its catalog. VM size
-fields default to `null`, which inherits Oblien capacity; a reseller may declare
-stricter caps. Oblien resolves account, platform and saved customer limits and
-enforces them on VM operations. Openship does not calculate CPU/RAM budgets,
-fetch account quota to fit an offer, or rewrite saved purchase terms on renewal.
-One Compose project must fit one VM; services can span multiple projects.
+Workspace count and aggregate CPU, RAM and disk are namespace allowances. A
+subscription can also limit each VM and each service. Openship submits the saved
+offer's `billing.resourceLimits`; Oblien resolves and enforces the effective
+limits. Admission reads provider allocations before queueing and provisioning,
+while the provider's atomic reservation remains authoritative. Openship does not
+rewrite saved purchase terms on renewal. One Compose project shares one VM;
+services can span multiple projects.
 
 ## Subscription and usage
 
@@ -213,6 +213,38 @@ provider returns `"unavailable"` and `null` measurements for that group while
 the other group can remain available. A `null` measurement does not mean zero
 usage or unlimited resources. `measuredAt` identifies the snapshot time.
 
+## Adjust Cloud capacity
+
+`GET /capacity` requires `billing:read` and returns the provider's reserved pool,
+authorized projects, each project's verified allocation and revision, and the
+subscription's service ceiling. Stopped workspaces and pending increases still
+reserve resources. These allocations differ from live CPU/RAM usage and from
+consumption credits. Missing measurements are unavailable, never zero.
+
+`POST /capacity/preview` accepts `projectId`, the current `revision`, and a
+`services` array of `{ serviceId, cpuCores, memoryMb }`. It also requires write
+access to the project and every service that could restart. The response names
+the affected services and the allocation before and after the adjustment.
+Previewing does not save settings or start a deployment.
+
+`POST /capacity/apply` accepts the same input, plus `confirmRestart: true` and
+an `idempotencyKey` of 16–128 letters, numbers, hyphens or underscores. Reuse the
+same key and input if the response is lost. The response contains `deploymentId`
+and `projectId`. The ordinary deployment pipeline reuses deployed images and
+keeps persistent volumes. Only resource overrides are saved; they commit with
+the deployment and build session in one transaction. Stale project or service
+settings require a fresh preview.
+
+Poll the deployment and read capacity again. A `ready` deployment is insufficient:
+wait for its worker to finish and for the provider allocation to match the
+preview. Retry the original deployment only after capacity is verified. Another
+concurrent deployment can still reserve the freed resources first.
+
+The editor supports running projects with a shared Docker workspace and an
+active deployment. It does not shrink disks or convert native Cloud workspaces.
+Unavailable projects include a reason. Local billing routes address a linked
+Cloud account; they do not resize self-hosted projects.
+
 ## Top-ups and the portal
 
 `GET /topup-packs` lists the one-shot credit packs from the same catalog;
@@ -248,6 +280,9 @@ closure and resource cleanup.
 | Read current billing state. | `billing.getState()` | `GET /api/billing/state`<br />`billing:read` |
 | Verify a checkout and its credit delivery for this organization. | `billing.getCheckout(input)` | `GET /api/billing/checkout`<br />`billing:read` |
 | Read compute usage, edge traffic, and bandwidth limits. | `billing.getResources()` | `GET /api/billing/resources`<br />`billing:read` |
+| Read verified Cloud pool and authorized project allocations. | `billing.getCapacity()` | `GET /api/billing/capacity`<br />`billing:read` |
+| Preview resource changes and affected restarts without applying them. | `billing.previewCapacity(input)` | `POST /api/billing/capacity/preview`<br />`billing:read` |
+| Apply a confirmed resource adjustment through the deployment queue. | `billing.applyCapacity(input)` | `POST /api/billing/capacity/apply`<br />`billing:write` |
 | Read subscription and renewal state. | `billing.getSubscription()` | `GET /api/billing/subscription`<br />`billing:read` |
 | Create a subscription checkout or subscription change. | `billing.createSubscription(input)` | `POST /api/billing/subscription`<br />`billing:write` |
 | Stop subscription renewal at the end of the paid period. | `billing.cancelSubscription()` | `POST /api/billing/cancel`<br />`billing:admin` |

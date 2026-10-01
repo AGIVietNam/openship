@@ -1,3 +1,4 @@
+import { savedOffer as subscriptionOffer, savedMetadata as subscriptionMetadata, savedLimits as planLimits } from "../../../test/helpers/saved-cloud-offer";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -26,10 +27,8 @@ import {
   syncOblienEntitlement, reconcileOblienEntitlement, entitlementQuota,
   assertCloudCanSpend, assertNamespaceHasQuota, ensureOblienDefaultQuota, resetAndRegrant, getQuotaState,
 } from "@repo/platform/engine/modules/billing/billing-oblien-quota";
-import { PRICING, planLimits } from "@repo/core";
+import { PRICING } from "@repo/core";
 import {
-  subscriptionOffer,
-  subscriptionMetadata,
   cloudPlan,
   complimentaryCloudPlan,
 } from "@repo/platform/engine/modules/billing/billing-catalog";
@@ -68,7 +67,7 @@ describe("Oblien-managed entitlements", () => {
     expect(h.mirror).toHaveBeenCalledWith("org_1", "os-customer", {
       planTierId: "pro", subscriptionStatus: "active", currentPeriodStart: period.start, currentPeriodEnd: period.end,
     });
-    expect(complimentaryCloudPlan(result.grant!)).toMatchObject({ price: { monthly: 0 }, monthlyCredits: 3_000_000 });
+    expect(complimentaryCloudPlan(result.grant!)).toMatchObject({ price: { monthly: 0 }, monthlyCredits: 3_500_000 });
     await expect(assertCloudCanSpend("org_1")).resolves.toBeUndefined();
     h.balance.mockResolvedValue({ namespace: "os-customer", balance: 0, blocking: true });
     await expect(assertCloudCanSpend("org_1")).rejects.toMatchObject({ code: "CLOUD_BILLING_BLOCKED" });
@@ -97,8 +96,8 @@ describe("Oblien-managed entitlements", () => {
       periodEnd: entitlement().periodEnd,
       cancelAtPeriodEnd: false,
       canceledAt: null,
-      offer: subscriptionOffer("starter", "monthly"),
-      metadata: subscriptionMetadata("starter", "org_1", "os-customer"),
+      offer: { ...subscriptionOffer("starter", "monthly"), reference: "openship:starter:v2", unitAmount: 1000, credits: 800 },
+      metadata: { ...subscriptionMetadata("starter", "org_1", "os-customer"), openship_offer_version: "2" },
     };
     const limits = structuredClone(planLimits("starter"));
     const raw = PRICING.plans.find((plan) => plan.id === "starter")!;
@@ -110,7 +109,7 @@ describe("Oblien-managed entitlements", () => {
     h.entitlement.mockResolvedValue({ ...entitlement(), tierId: "reseller" });
     h.subscription.mockResolvedValue({ namespace: "os-customer", subscription: saved });
     try {
-      raw.price.monthly = 2000;
+      raw.price.monthly = 4500;
       raw.limits.maxProjects = 100;
       raw.billing.creditsPerCycle = 9000;
       expect(await syncOblienEntitlement("org_1")).toMatchObject({ tier: "starter", limits });
@@ -118,7 +117,7 @@ describe("Oblien-managed entitlements", () => {
       expect(await cloudPlan("starter", saved)).toMatchObject({
         price: { monthly: 1000 },
         effectivePrice: { monthly: 1000 },
-        monthlyCredits: 1_200_000,
+        monthlyCredits: 800_000,
         limits,
         name: saved.offer.name,
       });

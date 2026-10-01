@@ -7,6 +7,19 @@ the in-app updater surfaces critical advisories from `release-advisories.json`.
 
 ### Fixed
 
+- Cloud GitHub connections use separate repository authorization, so a GitHub
+  identity can connect multiple Openship accounts without transferring sign-in.
+  Existing installations can be selected, personal tokens remain available in
+  Git settings, and each connection reports its own completion or failure.
+  Direct installation links also offer existing accounts before opening GitHub,
+  avoiding reconnects that end on GitHub settings without a setup callback.
+- Compose deployments preserve unchanged image services across folder uploads
+  and snapshot syncs. Import metadata updates no longer mark services dirty or
+  overwrite the timestamp of a concurrent configuration edit. Changed project
+  resource limits still apply while respecting each service's overrides (#986).
+- Docker replacement and teardown use graceful shutdown by default, honoring
+  image stop signals and configured grace periods. Runtime probes reap their
+  watchdog before exiting so PostgreSQL does not mistake it for a crashed backend.
 - Instance and project exports include plaintext environment values, server keys
   and credentials by default, without an export password. Imports still read
   older encrypted archives and encrypt credentials with the destination's key.

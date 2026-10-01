@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const h = vi.hoisted(() => ({
+  cloud: false,
+  assertLimits: vi.fn(),
   /** Every getTrustedHostCapacity call: the server asked about, and the claim. */
   probes: [] as Array<{ serverId?: string; isLocalTarget: boolean }>,
   rows: {} as Record<string, { id: string; isLocal: boolean } | undefined>,
@@ -21,10 +23,22 @@ const h = vi.hoisted(() => ({
 vi.mock("@repo/platform/engine/modules/apps/catalog-source", () => ({
   getTemplateForOrg: async (_org: string, id: string) => ({
     id,
+    kind: "template",
+    services: [{ name: "web", build: { dockerfile: "FROM alpine" },
+      resources: { cpuCores: 0.25, memoryMb: 256, diskMb: 8192 } }],
     minResources: { memoryMb: 2048 },
   }),
   getRuntimeCatalog: async () => [],
   listOrgCustomApps: async () => [],
+}));
+
+vi.mock("@repo/platform/engine/config/env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@repo/platform/engine/config/env")>();
+  return { ...actual, env: { ...actual.env, get CLOUD_MODE() { return h.cloud; } } };
+});
+vi.mock("@repo/platform/engine/lib/plan-guard", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  assertCloudDeploymentLimits: h.assertLimits,
 }));
 
 // Partial: the installer's module graph reaches auth/provision-user, which
@@ -63,6 +77,8 @@ const fit = (target: { deployTarget?: string; serverId?: string }) =>
   getAppHostFit(ctx, "some-app", target);
 
 beforeEach(() => {
+  h.cloud = false;
+  h.assertLimits.mockReset().mockResolvedValue(undefined);
   h.probes = [];
   h.rows = {
     "srv-local": { id: "srv-local", isLocal: true },
@@ -71,6 +87,14 @@ beforeEach(() => {
 });
 
 describe("getAppHostFit — the destination is derived, not claimed", () => {
+  it("previews a Cloud app's runtime without reserving a fixed extra build machine", async () => {
+    h.cloud = true;
+    const res = await fit({ deployTarget: "cloud" });
+    expect(res.cloud).toEqual({ status: "ready",
+      resources: { cpuCores: 0.25, memoryMb: 1024, diskMb: 8192 } });
+    expect(h.assertLimits).toHaveBeenCalledOnce();
+    expect(h.probes).toEqual([]);
+  });
   it("ignores a caller claiming 'local' for a REMOTE server", async () => {
     await fit({ deployTarget: "local", serverId: "srv-remote" });
     expect(h.probes).toEqual([{ serverId: "srv-remote", isLocalTarget: false }]);

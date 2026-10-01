@@ -6,6 +6,7 @@ import { PLANS, pricingUi } from "@repo/core";
 import { BillingSidebar } from "./billing-shared";
 import { PricingCards, type ApiPlan } from "@/components/billing/PricingCards";
 import type { BillingState } from "@/lib/api/billing";
+import { baseDictionary } from "@/i18n";
 
 function render(node: React.ReactElement) {
   return renderToStaticMarkup(<I18nProvider>{node}</I18nProvider>);
@@ -37,7 +38,7 @@ describe("billing sidebar", () => {
     expect(out).toContain("What's included");
     expect(out).toContain("Live Cloud plan");
     expect(out).toContain("$17");
-    expect(out).toContain("1,200 credits / billing cycle");
+    expect(out).toContain("Live Cloud plan : 1,200");
     expect(out).toContain("Support from the live catalog");
     expect(out).not.toContain("$10");
   });
@@ -76,32 +77,49 @@ const plan = (id: string, monthly: number | null): ApiPlan =>
     support: "email",
   }) as unknown as ApiPlan;
 
-describe("plans grid width", () => {
-  it("uses exactly as many columns as there are cards", () => {
-    // Pinned at `xl:grid-cols-5` while the catalog happened to publish five cards;
-    // dropping the $0 tier left five tracks for four cards and a column of dead
-    // space on the right.
-    const four = render(
-      <PricingCards
-        plans={[plan("starter", 1000), plan("pro", 3900), plan("team", 9900), plan("enterprise", null)]}
-        ui={ui}
-      />,
-    );
-    expect(four).toContain("xl:grid-cols-4");
-    expect(four).not.toContain("xl:grid-cols-5");
+describe("custom plan presentation", () => {
+  it("keeps the catalog's sales action and current-plan state without promising preset allowances", () => {
+    const custom = {
+      ...plan("enterprise", null),
+      name: "Enterprise",
+      description: "Limits tailored to your team.",
+      contactSales: "https://sales.example.test/contact",
+      limits: PLANS.enterprise.limits,
+    };
+    const offer = render(<PricingCards plans={[custom]} ui={ui} />);
+    expect(text(offer)).toContain(custom.description);
+    expect(text(offer)).toContain(ui.custom);
+    expect(offer).toContain(`href="${custom.contactSales}"`);
+    expect(text(offer)).toContain(ui.ctaContact);
+    expect(text(offer)).not.toContain("No set limit");
+    expect(text(offer)).not.toContain("Choose Enterprise");
 
-    const five = render(
-      <PricingCards
-        plans={[
-          plan("free", 0),
-          plan("starter", 1000),
-          plan("pro", 3900),
-          plan("team", 9900),
-          plan("enterprise", null),
-        ]}
-        ui={ui}
-      />,
-    );
-    expect(five).toContain("xl:grid-cols-5");
+    const current = render(<PricingCards plans={[custom]} ui={ui} currentPlan="enterprise" />);
+    expect(text(current)).toContain("Current plan");
+    expect(current).not.toContain(`href="${custom.contactSales}"`);
+  });
+});
+
+describe("plan comparison", () => {
+  it("shows benefits and places the shared usage explanation once after every plan", () => {
+    const plans = (["hobby", "starter", "pro", "team"] as const).map((id) => ({
+      ...PLANS[id], features: [...PLANS[id].features], resourceLimits: PLANS[id].oblienLimits,
+      listPrice: { monthly: PLANS[id].price.monthly }, effectivePrice: { monthly: PLANS[id].price.monthly }, campaign: null,
+    }));
+    const out = render(<PricingCards plans={plans} ui={ui} />);
+    const cards = [...out.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)].map(([card]) => text(card));
+    const copy = baseDictionary.billing.resourcesGuide;
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      expect(card).toContain(copy.buildTime);
+      expect(card).toContain(copy.buildIncluded);
+      expect(card).not.toMatch(/credits|Shared across|More features/i);
+    }
+    expect(out).not.toContain("<details");
+    expect(text(out)).toContain("Priority support");
+    expect(text(out).split(copy.poolNote)).toHaveLength(2);
+    expect(out.indexOf('role="note"')).toBeGreaterThan(out.lastIndexOf("</article>"));
+    expect(text(out)).toContain("Hobby : 400");
+    expect(text(out)).toContain("Scale : 9,000");
   });
 });

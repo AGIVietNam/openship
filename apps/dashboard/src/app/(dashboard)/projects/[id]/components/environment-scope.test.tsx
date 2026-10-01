@@ -16,7 +16,7 @@ const api = vi.hoisted(() => ({
   trigger: vi.fn(),
 }));
 vi.mock("@/lib/api", () => ({
-  projectsApi: { getEnv: api.getEnv, mergeEnv: api.mergeEnv },
+  projectsApi: { getEnv: api.getEnv, mergeEnv: api.mergeEnv, getCommitStatus: async () => ({ data: { supported: false } }) },
   servicesApi: { list: api.services },
   deployApi: { trigger: api.trigger },
 }));

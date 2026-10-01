@@ -38,7 +38,7 @@ r.get(
   ctrl.getStatus,
 );
 r.get("/local-status", { tag: "github:read", authorizationHandledByOperation: true, auditHandledByOperation: true, localOnly: true, mcp: { description: "Read this self-hosted controller’s GitHub identity status and any connection problem. Local here means the Openship controller, not the MCP client." } }, ctrl.getLocalStatus);
-r.get("/connect/poll", { tag: "github:read", authorizationHandledByOperation: true, auditHandledByOperation: true, localOnly: true, mcp: { description: "Read progress of an existing self-hosted GitHub device authorization. The user must complete GitHub’s browser approval; polling does not grant access." } }, ctrl.pollConnect);
+r.get("/connect/poll", { tag: "github:read", authorizationHandledByOperation: true, auditHandledByOperation: true, query: GitHubCollectionSchemas.pollConnect.input, mcp: { description: "Read a GitHub connection attempt using its returned state, or self-hosted device authorization without a state. Completion means the requested connection committed; polling never grants access." } }, ctrl.pollConnect);
 r.get(
   "/home",
   {
@@ -48,10 +48,10 @@ r.get(
   },
   ctrl.getHome,
 );
-r.post("/connect", { tag: "github:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcp: { description: "Start GitHub authorization and return the supported redirect, device-code or terminal flow. Give the returned URL/code to the user; do not claim connection until GitHub status confirms it. Browser approval remains outside MCP." }, body: GitHubCollectionSchemas.connect.input, bodyValidatedByOperation: true }, ctrl.connect);
+r.post("/connect", { tag: "github:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcp: { description: "Start GitHub connection and return a redirect, installation selection, device code, or token instructions. Let the user complete approval in Openship or GitHub. For redirects with completion=attempt, poll using the returned state; existing connection status does not confirm a new installation." }, body: GitHubCollectionSchemas.connect.input, bodyValidatedByOperation: true }, ctrl.connect);
 r.post(
   "/installations/claim",
-  { tag: "github:write", authorizationHandledByOperation: true, auditHandledByOperation: true, localOnly: true, mcpExcluded: "GitHub credential ownership and App installation are configured by the workspace owner in Settings → GitHub. Use connect/status for an existing supported connection flow." },
+  { tag: "github:write", authorizationHandledByOperation: true, auditHandledByOperation: true, mcpExcluded: "The browser completes GitHub authorization and selects an installation. Use connect/status to start and inspect the connection." },
   ctrl.claimInstallation,
 );
 r.public(

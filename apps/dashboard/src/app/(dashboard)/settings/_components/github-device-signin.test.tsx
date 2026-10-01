@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   pollConnect: vi.fn(),
   getUserHome: vi.fn(),
   getStatusDeduped: vi.fn(),
+  getStatus: vi.fn(),
   invalidateStatus: vi.fn(),
   showToast: vi.fn(),
   setInstanceToken: vi.fn(),
@@ -57,6 +58,14 @@ const deviceResponse = {
   expiresIn: 899,
   interval: 5,
 };
+const capabilities = {
+  platform: "selfhosted", desktop: false, primary: "device",
+  methods: [
+    { kind: "device", available: true, configured: true },
+    { kind: "token", available: true, configured: false, credentialScope: "instance" },
+    { kind: "app", available: true, configured: false, requiresCloud: true },
+  ],
+};
 
 let container: HTMLDivElement;
 let root: Root;
@@ -68,6 +77,7 @@ beforeEach(() => {
   api.connect.mockResolvedValue(deviceResponse);
   api.pollConnect.mockResolvedValue({ status: "pending" });
   api.getStatusDeduped.mockResolvedValue({ state: disconnected });
+  api.getStatus.mockResolvedValue({ state: disconnected, capabilities });
   api.getUserHome.mockResolvedValue({ state: disconnected });
   api.setInstanceToken.mockResolvedValue({ connected: true, login: "new-account" });
   api.disconnect.mockResolvedValue({ success: true });

@@ -9,6 +9,7 @@
 
 import { Oblien } from "oblien";
 import { cloudWorkspaceStatus } from "./cloud/workspace-ready";
+import { updateCloudWorkspaceResources } from "./cloud/workspace-resources";
 import { deleteCloudWorkspace } from "./cloud/workspace-delete";
 import type { WorkspaceHandle } from "oblien";
 import type { ExecStreamEvent } from "oblien";
@@ -788,6 +789,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         imageRef: workspaceId,
         durationMs: Date.now() - startedAt,
         errorMessage: `Image preparation failed: ${message}`,
+        errorCause: err,
         artifactOwned: true,
       };
     } finally {
@@ -833,6 +835,10 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         if (config.cloudWorkspaceId) {
           log.log("Attaching to uploaded workspace...\n");
           wsId = config.cloudWorkspaceId;
+          const uploaded = this.ws(wsId);
+          const current = await uploaded.get();
+          await updateCloudWorkspaceResources(uploaded, { ...config.resources,
+            diskMb: Math.max(config.resources.diskMb, current.resources?.disk_size_mb ?? 0) }, current);
           rt = await this.adoptWorkspaceRuntime(wsId);
           this.trackActiveBuildWorkspace(config.sessionId, wsId);
           log.log("Build environment ready\n");
@@ -852,6 +858,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
           errorMessage: activeBuild.abort.signal.aborted
             ? undefined
             : `Failed to provision build environment: ${msg}`,
+          errorCause: activeBuild.abort.signal.aborted ? undefined : err,
         };
       }
 
@@ -1076,6 +1083,13 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         );
       }
 
+      // The source probe only supplies Dockerfile text; execution clones its
+      // own pinned context. Release the probe before claiming the build slot.
+      // Otherwise one native build reserves its full allocation twice.
+      if (source.kind === "remote") {
+        await source.cleanup();
+        source.cleanup = async () => {};
+      }
       const built = await this.executeDockerfilePlan({
         config,
         plan,
@@ -1120,6 +1134,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         status: "failed",
         durationMs: Date.now() - startedAt,
         errorMessage: message,
+        errorCause: err,
       };
     } finally {
       await source?.cleanup().catch(() => {});
@@ -1262,9 +1277,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
             contextRelativePath: cloudBuildContextPath(config),
             dockerfile,
             cleanup: async () => {
-              await this.ws(workspaceId)
-                .delete()
-                .catch(() => {});
+              await deleteCloudWorkspace(this.ws(workspaceId));
               this.untrackActiveBuildWorkspace(config.sessionId, workspaceId);
             },
           };
@@ -1829,26 +1842,20 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
       );
     }
 
-    // 2. Resize CPU/memory DOWN to production levels. The workspace was built at
-    //    the large build tier (DEFAULT_BUILD_RESOURCE_CONFIG = 4 vCPU / 8 GB); a
-    //    running app must not keep hogging that. `config.resources` is the resolved
-    //    production tier (cloud default = "low" / 512 MB). Disk is NOT resized down
-    //    — VMs don't support disk shrink, so the build disk carries over (harmless).
-    //    Non-fatal: if the resize call errors we log and keep the deploy (it just
-    //    runs at the build size) rather than failing an otherwise-healthy release.
+    // Apply the production CPU/RAM before activation. The build disk is retained;
+    // an unapplied resize must never promote a workspace at its old build size.
     const prodResources = config.resources ?? DEFAULT_RESOURCE_CONFIG;
     // MANDATORY (not best-effort): a workspace left at the build tier hogs the
     // pool and blows the free-tier limit — the exact saturation bug we chase. So
     // retry transient errors, then FAIL the deploy rather than silently promoting
-    // a 4 vCPU / 8 GB workspace to production. `apply: true` performs the live
+    // a build-sized workspace to production. `apply: true` performs the live
     // resize. Disk is not shrunk (VMs can't) — the build disk carries over.
     let resized = false;
     for (let attempt = 1; attempt <= 3 && !resized; attempt++) {
       try {
-        await ws.resources.update({
-          cpus: cloudCpus(prodResources.cpuCores),
-          memory_mb: prodResources.memoryMb,
-          apply: true,
+        await updateCloudWorkspaceResources(ws, {
+          cpuCores: prodResources.cpuCores,
+          memoryMb: prodResources.memoryMb,
         });
         resized = true;
         log({
@@ -1860,6 +1867,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         if (attempt === 3) {
           throw new Error(
             `Failed to shrink workspace from the build tier to ${prodResources.cpuCores} vCPU · ${prodResources.memoryMb} MB after 3 attempts — refusing to promote a build-sized workspace: ${safeErrorMessage(err)}`,
+            { cause: err },
           );
         }
         log({

@@ -47,9 +47,17 @@ interface CreatedWorkload {
 }
 
 function fakeClientRecording(created: CreatedWorkload[]) {
+  const resources = { cpus: 1, memory_mb: 1024, disk_size_mb: 20480 };
   const handle = {
+    id: WORKSPACE_ID,
+    get: async () => ({ id: WORKSPACE_ID, resources: { ...resources } }),
     lifecycle: { makePermanent: async () => {} },
-    resources: { update: async () => {} },
+    resources: {
+      update: async (next: { cpus: number; memory_mb: number }) => {
+        Object.assign(resources, next);
+        return { success: true, relaunched: true };
+      },
+    },
     // Only reached when config.productionPaths is set. Exit 0 with no output, so
     // the staging/move script "succeeds" and emits no stderr (which execAndStream
     // would surface as an extra warn line).

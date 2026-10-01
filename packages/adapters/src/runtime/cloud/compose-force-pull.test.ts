@@ -20,7 +20,8 @@ const config: MultiServiceDeployConfig = {
 describe("cloud compose forced image refresh", () => {
   it("keeps an existing native service workspace when an update fails", async () => {
     const existing = {
-      get: vi.fn(async () => ({ id: "workspace-live" })),
+      id: "workspace-live",
+      get: vi.fn(async () => ({ id: "workspace-live", resources: { cpus: 0.5, memory_mb: 512 } })),
       lifecycle: { makePermanent: vi.fn(async () => { throw new Error("Provider unavailable"); }) },
       delete: vi.fn(),
     };
@@ -54,8 +55,10 @@ describe("cloud compose forced image refresh", () => {
 
   it("allows a newly built workspace to replace the old one", async () => {
     const builtWorkspace = {
+      id: "workspace-built",
+      get: vi.fn(async () => ({ id: "workspace-built", resources: { cpus: 0.5, memory_mb: 512 } })),
       lifecycle: { makePermanent: vi.fn(async () => undefined) },
-      resources: { update: vi.fn(async () => undefined) },
+      resources: { update: vi.fn(async () => ({ success: true, relaunched: true })) },
       workloads: {
         delete: vi.fn(async () => undefined),
         create: vi.fn(async () => undefined),

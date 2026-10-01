@@ -51,6 +51,10 @@ vi.mock("@repo/platform/engine/lib/route-apply.service", () => ({
   reconcileProjectRoutes: reconcile,
 }));
 
+vi.mock("@repo/platform/engine/lib/platform-config", () => ({
+  platform: () => ({ target: "selfhosted" }),
+}));
+
 vi.mock("@repo/platform/engine/modules/route-rules/route-rule.service", () => ({
   pushProjectRules: vi.fn().mockResolvedValue(undefined),
 }));
@@ -109,6 +113,54 @@ beforeEach(() => {
   listServicesByProject.mockReset().mockResolvedValue([]);
   syncManagedEdge.mockReset().mockResolvedValue({ failures: [] });
   deregisterManagedEdge.mockReset().mockResolvedValue({ failures: [] });
+});
+
+describe("provider-managed native Cloud routes", () => {
+  it("updates and removes through the Cloud provider without a public-server edge registration", async () => {
+    const project = {
+      id: "project-1",
+      slug: "app",
+      port: 3000,
+      organizationId: "org-1",
+      cloudWorkspaceId: null,
+      activeDeploymentId: "deployment-1",
+      webhookDomain: null,
+    } as Parameters<typeof reapplyProjectLiveRoutes>[0];
+    findDeployment.mockReset().mockResolvedValue({
+      id: "deployment-1",
+      projectId: project.id,
+      organizationId: project.organizationId,
+      containerId: "workspace-one",
+      meta: { deployTarget: "cloud", workspaceId: "workspace-one" },
+    });
+    listByProject
+      .mockReset()
+      .mockResolvedValue([
+        domainRow({ id: "current", hostname: "app.opsh.io", targetPort: 3000, domainType: "free" }),
+      ]);
+    resolveRuntime.mockReset();
+    reconcile.mockReset().mockResolvedValue(undefined);
+
+    await reapplyProjectLiveRoutes(project, ["previous.opsh.io"]);
+
+    expect(reconcile).toHaveBeenCalledExactlyOnceWith(
+      project,
+      expect.objectContaining({
+        deployment: expect.objectContaining({
+          id: "deployment-1",
+          projectId: project.id,
+          organizationId: project.organizationId,
+          containerId: "workspace-one",
+        }),
+        registers: [
+          { hostname: "app.opsh.io", port: 3000, isCustomDomain: false },
+        ],
+        removes: [{ hostname: "previous.opsh.io", isCustomDomain: false }],
+      }),
+    );
+    expect(syncManagedEdge).not.toHaveBeenCalled();
+    expect(deregisterManagedEdge).not.toHaveBeenCalled();
+  });
 });
 
 describe("shouldRefuseLoopbackRoute", () => {

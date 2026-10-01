@@ -80,6 +80,8 @@ jobs:
             command: bun run --cwd apps/api test --shard=2/2
           - suite: Database
             command: bun run --cwd packages/db test
+          - suite: Cloud build capacity
+            command: RUN_DOCKER_E2E=1 bun run --cwd apps/api test:e2e test/e2e/cloud-build-capacity.e2e.test.ts
           # Both suites rebuild the same native bundle. Keep them sequential on
           # their own runner; the other packages do not share that filesystem.
           - suite: SDK and CLI
@@ -113,7 +115,7 @@ jobs:
 
       # Run every workspace test, with the large API suite split across runners.
       # Direct Vitest runs and Turbo's stream mode expose progress immediately.
-      # API test/e2e/** still runs in release-gate.yml against a real daemon.
+      # The complete API test/e2e/** suite also runs in release-gate.yml.
       - name: Run tests
         run: ${{ matrix.command }}
 

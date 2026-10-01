@@ -64,6 +64,7 @@ const ResourceValuesSchema = Type.Object({
 export const ProjectResourcesSchema = Type.Object({
   production: ResourceValuesSchema,
   build: ResourceValuesSchema,
+  buildMode: Type.Optional(Type.Union([Type.Literal("automatic"), Type.Literal("custom")])),
   sleepMode: Type.String(),
   port: Type.Number(),
   tier: ResourceTierEnum(),

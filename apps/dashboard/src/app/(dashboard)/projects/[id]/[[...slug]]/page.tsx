@@ -742,7 +742,9 @@ const ProjectSettingsContent = () => {
         // now when the server is REACHABLE but a destroy kept failing —
         // `canForceOrphan` lets the user drop the row anyway and let GC reclaim
         // the leaked resources later.
-        const reasons = (body.unrecoverable ?? []).map((u) => u.step).join(", ");
+        const reasons = [
+          ...new Set((body.unrecoverable ?? []).map((u) => u.error?.trim() || u.step)),
+        ].join(" · ");
         console.error("[delete-project] teardown failed", body.unrecoverable);
         // The source teardown couldn't complete. Rather than a jarring
         // window.confirm (or silently reverting to a plain "Draft"), surface a

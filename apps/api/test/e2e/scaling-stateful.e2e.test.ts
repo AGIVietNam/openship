@@ -7,13 +7,19 @@ import { randomUUID } from "node:crypto";
 import { db, repos, schema } from "@repo/db";
 import {
   k3sTools,
+  installDocker,
   DockerRuntime,
   KubernetesRuntime,
   patchKubernetesObject,
   type KubernetesApi,
   type KubernetesObject,
 } from "@repo/adapters";
-import type { ClusterRuntime, ClusterVolumeSnapshot, ClusterVolume } from "@repo/core";
+import {
+  allocateClusterRuntimeRanges,
+  type ClusterRuntime,
+  type ClusterVolumeSnapshot,
+  type ClusterVolume,
+} from "@repo/core";
 import type { ClusterStorage, DeploymentEvent } from "@repo/contracts";
 import { OpenshipClient } from "@repo/sdk/client";
 import { describeDockerE2E, requireDocker } from "../helpers/docker-e2e";
@@ -248,7 +254,61 @@ describeDockerE2E.sequential("stateful scaling through real Linux hosts", () => 
     vi.restoreAllMocks();
   }, 300_000);
 
-  it("prepares the servers and verifies the private application cluster over SSH", async () => {
+  it("enables scaling over SSH while preserving an existing Docker application", async () => {
+    // A fresh host without Docker cannot reproduce #960. Use a real daemon on
+    // one member, including its built-in host/none networks with no IPAM ranges.
+    const { resolveServerExecutor } = await import("@repo/platform/engine/lib/deployment-runtime");
+    const { executor } = await resolveServerExecutor(lab.nodes[0]!.id, org.organizationId);
+    const docker = await installDocker(executor, (entry) =>
+      console.info(`[stateful-e2e:docker] ${entry.message}`),
+    );
+    expect(docker.success, docker.error).toBe(true);
+    // Occupy the range a clean cluster would choose to exercise conflict detection.
+    const dockerSubnet = allocateClusterRuntimeRanges(lab.networkCidrs).podCidr;
+    await lab.exec(0, [
+      "docker",
+      "network",
+      "create",
+      "--subnet",
+      dockerSubnet,
+      "existing-docker-app",
+    ]);
+    await lab.exec(
+      0,
+      [
+        "docker",
+        "run",
+        "--detach",
+        "--name",
+        "existing-docker-app",
+        "--network",
+        "existing-docker-app",
+        "--publish",
+        "127.0.0.1:18080:8080",
+        "busybox:1.37.0",
+        "sh",
+        "-ec",
+        "mkdir /www\nprintf %s existing-docker-app > /www/index.html\nexec httpd -f -p 8080 -h /www",
+      ],
+      180,
+    );
+    const dockerReply = () =>
+      lab.exec(0, [
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "5",
+        "http://127.0.0.1:18080/",
+      ]);
+    await eventually(
+      "the existing Docker application",
+      dockerReply,
+      (reply) => reply === "existing-docker-app",
+      30_000,
+    );
+
     const requestId = randomUUID();
     runtime = await client.servers.setupClusterRuntime({ clusterId, revision, requestId });
     const duplicate = await client.servers.setupClusterRuntime({ clusterId, revision, requestId });
@@ -260,6 +320,8 @@ describeDockerE2E.sequential("stateful scaling through real Linux hosts", () => 
     expect(runtime.error).toBeNull();
     expect(runtime.status).toBe("ready");
     expect(runtime.plan.hosts.every((host) => host.ready && host.installed)).toBe(true);
+    expect([runtime.plan.podCidr, runtime.plan.serviceCidr]).not.toContain(dockerSubnet);
+    expect(await dockerReply()).toBe("existing-docker-app");
     const { openClusterApi } = await import("@repo/platform/engine/lib/cluster-deployment-target");
     api = (await openClusterApi(org.organizationId, clusterId, runtime.id)).api;
     expect((await api.request("GET", "/api/v1/namespaces/kube-system")).metadata.uid).toBe(

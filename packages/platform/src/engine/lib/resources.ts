@@ -13,6 +13,7 @@
  */
 
 import {
+  cloudCpus,
   DEFAULT_RESOURCE_CONFIG,
   DEFAULT_BUILD_RESOURCE_CONFIG,
   type ResourceConfig,
@@ -54,12 +55,15 @@ export function encodeResources(
   build?: ResourceConfig | null,
   sleepMode = "auto_sleep",
   port = 3000,
-  opts?: { isCloud?: boolean; capacity?: HostCapacity },
+  opts?: { isCloud?: boolean; capacity?: HostCapacity; automaticBuild?: boolean },
 ): ProjectResources {
   const isCloud = opts?.isCloud ?? false;
   const prod = production ?? (isCloud ? { ...DEFAULT_RESOURCE_CONFIG } : { ...UNLIMITED_RESOURCES });
   return {
-    build: build ?? { ...(isCloud ? DEFAULT_BUILD_RESOURCE_CONFIG : UNLIMITED_RESOURCES) },
+    build: build ?? (opts?.automaticBuild
+      ? { cpuCores: 0, memoryMb: 0, diskMb: DEFAULT_BUILD_RESOURCE_CONFIG.diskMb }
+      : { ...(isCloud ? DEFAULT_BUILD_RESOURCE_CONFIG : UNLIMITED_RESOURCES) }),
+    ...(opts?.automaticBuild ? { buildMode: build ? "custom" as const : "automatic" as const } : {}),
     production: prod,
     sleepMode,
     port,
@@ -180,5 +184,71 @@ export function resolveBuildResources(
     cpuCores: resolved.cpuCores > 0 ? resolved.cpuCores : DEFAULT_BUILD_RESOURCE_CONFIG.cpuCores,
     memoryMb: resolved.memoryMb > 0 ? resolved.memoryMb : DEFAULT_BUILD_RESOURCE_CONFIG.memoryMb,
     diskMb: resolved.diskMb > 0 ? resolved.diskMb : DEFAULT_BUILD_RESOURCE_CONFIG.diskMb,
+  };
+}
+
+/** Shared by installation previews, plan checks, and VM provisioning. */
+export interface CloudServiceResourceInput {
+  name?: string;
+  enabled?: boolean;
+  kind?: string;
+  image?: string | null;
+  build?: unknown;
+  advanced?: {
+    resources?: ResourceConfig | Record<string, unknown> | null;
+    build?: unknown;
+    imageTemplate?: unknown;
+  } | null;
+}
+
+export function cloudDockerNeedsBuild(
+  services: CloudServiceResourceInput[],
+  retainedImages?: Readonly<Record<string, string>>,
+): boolean {
+  return services.some((service) => cloudServiceNeedsBuild(service, retainedImages));
+}
+
+export function cloudServiceNeedsBuild(
+  service: CloudServiceResourceInput,
+  retainedImages?: Readonly<Record<string, string>>,
+): boolean {
+  return service.enabled !== false &&
+    !(service.name && retainedImages?.[service.name]?.trim()) &&
+    Boolean(service.build || service.advanced?.build || (service.kind === "monorepo" && !service.image));
+}
+
+export function cloudDockerResources(input: {
+  resources?: ResourceConfig | Record<string, unknown> | null;
+  buildResources?: ResourceConfig | Record<string, unknown> | null;
+  reserveBuild?: boolean;
+  services: Array<{
+    enabled?: boolean;
+    resources?: ResourceConfig | Record<string, unknown> | null;
+  }>;
+}): ResourceConfig {
+  const resources = input.services
+    .filter((s) => s.enabled !== false)
+    .map((s) => resolveCloudServiceResources(s.resources, input.resources));
+  const build = input.reserveBuild
+    ? resolveBuildResources(input.buildResources, { isCloud: true })
+    : null;
+  // Image pulls need no source-build reservation. Include bounded Docker/OS
+  // overhead; a source build receives temporary resources released after deployment.
+  // Oblien accepts fractional CPU, including on Docker hosts. Use the same
+  // normalization as native Cloud workspaces instead of reserving whole cores.
+  return {
+    cpuCores: cloudCpus(
+      Math.max(
+        build?.cpuCores ?? 0,
+        resources.reduce((n, r) => n + r.cpuCores, 0),
+      ),
+    ),
+    memoryMb: Math.max(
+      1024,
+      Math.ceil(
+        (512 + (build?.memoryMb ?? 0) + resources.reduce((n, r) => n + r.memoryMb, 0)) / 256,
+      ) * 256,
+    ),
+    diskMb: Math.max(8192, build?.diskMb ?? 0, ...resources.map((r) => r.diskMb)),
   };
 }

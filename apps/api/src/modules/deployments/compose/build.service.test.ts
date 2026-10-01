@@ -130,7 +130,8 @@ async function run(
   buildEnvVars: Record<string, string> = {},
   imageRefFor?: (item: Captured) => string,
   composeInterpolationEnv: Record<string, string> = buildEnvVars,
-  options: { cloud?: boolean; targetServiceIds?: Set<string>; refreshServiceIds?: Set<string> } = {},
+  options: { cloud?: boolean; targetServiceIds?: Set<string>; refreshServiceIds?: Set<string>;
+    serviceBuildResources?: Record<string, BuildConfig["resources"]> } = {},
 ) {
   listByProjectMock.mockResolvedValue(services);
   const captured: Captured[] = [];
@@ -174,6 +175,7 @@ async function run(
     composeInterpolationEnv,
     buildEnvVars,
     buildResources: DEFAULT_RESOURCE_CONFIG,
+    serviceBuildResources: options.serviceBuildResources,
     targetServiceIds: options.targetServiceIds,
     refreshServiceIds: options.refreshServiceIds,
   });
@@ -185,6 +187,24 @@ function runCloud(services: unknown[], snapshot?: Partial<BuildConfigSnapshotLik
 }) {
   return run(services, undefined, snapshot, {}, undefined, {}, { ...options, cloud: true });
 }
+
+describe("per-service Cloud build allocations", () => {
+  it("forwards each selected allocation to the builder instead of multiplying one default", async () => {
+    const allocations = {
+      api: { cpuCores: 0.25, memoryMb: 256, diskMb: 8192 },
+      web: { cpuCores: 0.5, memoryMb: 768, diskMb: 8192 },
+    };
+    const { captured } = await run([
+      repoService({ name: "api", id: "api" }), repoService({ name: "web", id: "web" }),
+    ], undefined, undefined, {}, undefined, {}, { serviceBuildResources: allocations });
+    expect(captured.map(item => [item.serviceName, item.config.resources])).toEqual(Object.entries(allocations));
+  });
+
+  it("refuses an unbudgeted source service before invoking the build batch", async () => {
+    await expect(run([repoService()], undefined, undefined, {}, undefined, {}, { serviceBuildResources: {} }))
+      .rejects.toThrow("service build configuration changed after capacity was checked");
+  });
+});
 
 describe("Cloud Docker uses the shared Compose source planner", () => {
   it("sends inline files into one shared workspace context without an API-host source path", async () => {

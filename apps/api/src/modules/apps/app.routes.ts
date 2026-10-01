@@ -39,7 +39,7 @@ r.get(
     tag: "project:list",
     mcp: {
       description:
-        "Check whether a destination meets an app's declared minimum resources, before installing. Query: deployTarget, serverId.",
+        "Preview app capacity before installing. Self-hosted minimums are advisory; Cloud checks the shared workspace allocation against the plan. Pass projectId to include an existing draft's saved resource settings. Query: deployTarget, serverId, projectId.",
     },
     query: AppHostFitInputSchema,
   },

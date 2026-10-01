@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DomainDnsChallenge } from "@repo/contracts";
 import { I18nProvider } from "@/components/i18n-provider";
+import { ModalProvider } from "@/context/ModalContext";
 import { baseDictionary } from "@/i18n";
 import DnsChallengePanel from "./DnsChallengePanel";
 
@@ -69,6 +70,7 @@ async function render(domainId = "domain", renew = false) {
     root.render(
       <StrictMode>
         <I18nProvider>
+          <ModalProvider>
           <DnsChallengePanel
             domainId={domainId}
             hostname="*.example.com"
@@ -77,6 +79,7 @@ async function render(domainId = "domain", renew = false) {
             onChanged={api.changed}
             onClose={() => {}}
           />
+          </ModalProvider>
         </I18nProvider>
       </StrictMode>,
     ),

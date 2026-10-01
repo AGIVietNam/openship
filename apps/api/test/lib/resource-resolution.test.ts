@@ -75,11 +75,11 @@ describe("resolveBuildResources", () => {
     });
   });
 
-  it("keeps the build-sized default on cloud", () => {
+  it("keeps the bounded build default on cloud", () => {
     expect(resolveBuildResources(null, { isCloud: true })).toEqual({
-      cpuCores: 4,
-      memoryMb: 8192,
-      diskMb: 10240,
+      cpuCores: 1,
+      memoryMb: 2048,
+      diskMb: 8192,
     });
   });
 });
@@ -132,6 +132,13 @@ describe("decodeResources", () => {
 });
 
 describe("encodeResources", () => {
+  it("reports automatic hosted Cloud builds without inventing a fixed CPU/RAM machine", () => {
+    expect(encodeResources(null, null, "auto_sleep", 3000, { isCloud: true, automaticBuild: true }))
+      .toMatchObject({ buildMode: "automatic", build: { cpuCores: 0, memoryMb: 0, diskMb: 8192 } });
+    const build = { cpuCores: 0.25, memoryMb: 512, diskMb: 8192 };
+    expect(encodeResources(null, build, "auto_sleep", 3000, { isCloud: true, automaticBuild: true }))
+      .toMatchObject({ buildMode: "custom", build });
+  });
   it("reports unlimited + the detected tier for an unconfigured self-hosted project", () => {
     const out = encodeResources(null, null, "auto_sleep", 3000, {
       isCloud: false,

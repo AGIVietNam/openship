@@ -25,8 +25,8 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
-import { getBuildImage, safeErrorMessage, type StackId } from "@repo/core";
-import { provisionCloudWorkspace } from "@repo/adapters";
+import { getBuildImage, safeErrorMessage, RESOURCE_TIER_SPECS, type StackId } from "@repo/core";
+import { DEFAULT_BUILD_RESOURCE_CONFIG, provisionCloudWorkspace } from "@repo/adapters";
 import { env } from "../../../config/env";
 import { getNamespaceClient } from "../../../lib/openship-cloud";
 import { resolveApiPublicUrl } from "../../../lib/public-url";
@@ -48,9 +48,9 @@ const SESSION_TTL_MS = 60 * 60_000;
  *  workspace is promoted to permanent on deploy, reaped on TTL/exit otherwise. */
 const WORKSPACE_TTL = "60m";
 
-/** Build-time resources for the upload workspace. Deploy makes it permanent
- *  (and can resize); these just need to be enough to install + build. */
-const UPLOAD_BUILD_RESOURCES = { cpuCores: 2, memoryMb: 2048, diskMb: 8192 } as const;
+/** Uploading files needs only the existing Micro profile. The worker selects
+ * build resources from current Cloud headroom when the actual build starts. */
+const UPLOAD_RESOURCES = { ...RESOURCE_TIER_SPECS.micro, diskMb: DEFAULT_BUILD_RESOURCE_CONFIG.diskMb };
 
 /** Oblien runtime gateway (routes by the workspace-scoped token). Server-side
  *  only — the browser never learns this; it just gets an opaque upload URL. */
@@ -160,7 +160,7 @@ export async function createFolderSession(
         name: `upload-${input.orgId.slice(0, 16)}-${id.slice(0, 6)}`,
         image,
         mode: "temporary",
-        resources: UPLOAD_BUILD_RESOURCES,
+        resources: UPLOAD_RESOURCES,
         ttl: WORKSPACE_TTL,
       });
       workspaceId = provisioned.workspaceId;

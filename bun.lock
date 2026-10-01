@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "@repo/workspace",
@@ -150,6 +151,7 @@
       "name": "@repo/web",
       "version": "0.8.0",
       "dependencies": {
+        "@repo/contracts": "workspace:*",
         "@repo/core": "workspace:*",
         "@repo/ui": "workspace:*",
         "clsx": "2.1.1",
@@ -161,7 +163,6 @@
         "marked": "^15.0.0",
         "motion": "12.4.7",
         "next": "^16.1.6",
-        "nodemailer": "^6.9.16",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "react-wrap-balancer": "^1.1.1",
@@ -172,7 +173,6 @@
         "@tailwindcss/postcss": "^4.2.1",
         "@types/mdx": "^2.0.14",
         "@types/node": "^22.13.0",
-        "@types/nodemailer": "^6.4",
         "@types/react": "^19.1.0",
         "@types/react-dom": "^19.1.0",
         "postcss": "^8.5.8",
@@ -192,7 +192,7 @@
         "dockerode": "^4.0.9",
         "ignore": "^7.0.5",
         "ioredis": "^5.10.0",
-        "oblien": "2.4.0",
+        "oblien": "2.5.0",
         "ssh2": "^1.17.0",
         "tar-fs": "^2.1.4",
         "undici": "^7.29.1",
@@ -377,7 +377,7 @@
     "electron",
   ],
   "patchedDependencies": {
-    "oblien@2.4.0": "packages/adapters/patches/oblien@2.4.0.patch",
+    "oblien@2.5.0": "packages/adapters/patches/oblien@2.5.0.patch",
   },
   "packages": {
     "@alloc/quick-lru": ["@alloc/quick-lru@5.2.0", "", {}, "sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw=="],
@@ -2462,7 +2462,7 @@
 
     "object-keys": ["object-keys@1.1.1", "", {}, "sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA=="],
 
-    "oblien": ["oblien@2.4.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.27.1", "ws": "^8.18.3" }, "bin": { "oblien": "dist/cli/index.js", "oblien-mcp": "dist/mcp/index.js" } }, "sha512-AD+2MC5FbYx4WA6kQaj9fFckzQRDMx31l61eTznW07TQL9Vrn4GisVJrhTOoUasrqqmjPogSWh/Lt+UV1W1oOQ=="],
+    "oblien": ["oblien@2.5.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.27.1", "ws": "^8.18.3" }, "bin": { "oblien": "dist/cli/index.js", "oblien-mcp": "dist/mcp/index.js" } }, "sha512-uHeG/oghIzign65bKL5VekWhdi/g15rGhSoAq3+FbNmQul8gYXmy1Oyx6APFs9ib0g/2KRj1uCfPXd6y1V2mzA=="],
 
     "obug": ["obug@2.1.1", "", {}, "sha512-uTqF9MuPraAQ+IsnPf366RG4cP9RtUi7MLO1N3KEc+wb0a6yKpeL0lmk2IB1jY5KHPAlTc6T/JRdC/YqxHNwkQ=="],
 
@@ -3308,10 +3308,6 @@
 
     "@repo/ui/@types/node": ["@types/node@25.3.5", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-oX8xrhvpiyRCQkG1MFchB09f+cXftgIXb3a7UUa4Y3wpmZPw5tyZGTLWhlESOLq1Rq6oDlc8npVU2/9xiCuXMA=="],
 
-    "@repo/web/@types/nodemailer": ["@types/nodemailer@6.4.24", "", { "dependencies": { "@types/node": "*" } }, "sha512-Ww4u0rT9wQNXh4JiQaIwx3QWdcOFXzOjQA2zc+jtFYNmQiT4mIUqcDin51bDFdkzKubFnQCZNK7FIHlPKQ/q9w=="],
-
-    "@repo/web/nodemailer": ["nodemailer@6.10.1", "", {}, "sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA=="],
-
     "@repo/web/tailwind-merge": ["tailwind-merge@3.0.2", "", {}, "sha512-l7z+OYZ7mu3DTqrL88RiKrKIqO3NcpEO8V/Od04bNpvk0kiIFndGEoqfuzvj4yuhRkHKjRkII2z+KS2HfPcSxw=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.8.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.1.0", "tslib": "^2.4.0" }, "bundled": true }, "sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg=="],
@@ -3672,8 +3668,6 @@
 
     "@repo/ui/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
 
-    "@repo/web/@types/nodemailer/@types/node": ["@types/node@25.3.5", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-oX8xrhvpiyRCQkG1MFchB09f+cXftgIXb3a7UUa4Y3wpmZPw5tyZGTLWhlESOLq1Rq6oDlc8npVU2/9xiCuXMA=="],
-
     "@types/fs-extra/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
 
     "@types/nodemailer/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
@@ -4019,8 +4013,6 @@
     "@electron/rebuild/ora/cli-cursor/restore-cursor": ["restore-cursor@3.1.0", "", { "dependencies": { "onetime": "^5.1.0", "signal-exit": "^3.0.2" } }, "sha512-l+sSefzHpj5qimhFSE5a8nufZYAM3sBSVMAPtYkmC+4EH2anSGaEMXSD0izRQbu9nfyQ9y5JrVmp7E8oZrUjvA=="],
 
     "@electron/rebuild/tar/minizlib/minipass": ["minipass@3.3.6", "", { "dependencies": { "yallist": "^4.0.0" } }, "sha512-DxiNidxSEK+tHG6zOIklvNOwm3hvCrbUrdtzY74U6HKTJxvIDfOUL5W5P2Ghd3DTkhhKPYGqeNUIh5qcM4YBfw=="],
-
-    "@repo/web/@types/nodemailer/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
 
     "api/ora/cli-cursor/restore-cursor": ["restore-cursor@3.1.0", "", { "dependencies": { "onetime": "^5.1.0", "signal-exit": "^3.0.2" } }, "sha512-l+sSefzHpj5qimhFSE5a8nufZYAM3sBSVMAPtYkmC+4EH2anSGaEMXSD0izRQbu9nfyQ9y5JrVmp7E8oZrUjvA=="],
 

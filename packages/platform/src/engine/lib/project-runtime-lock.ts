@@ -3,7 +3,7 @@ import { repos, type Project } from "@repo/db";
 import { createProvisionLock } from "./provision-lock";
 
 /** Locks already owned by the current async call tree (nested helpers are safe). */
-const heldProjectRuntimeLocks = new AsyncLocalStorage<ReadonlySet<string>>();
+const heldProjectRuntimeLocks = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>();
 
 /**
  * One cross-process critical section for a project's live routing/runtime state.
@@ -22,12 +22,19 @@ export function projectRuntimeLockKey(projectId: string): string {
 
 export function withProjectRuntimeLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
   const held = heldProjectRuntimeLocks.getStore();
-  if (held?.has(projectId)) return fn();
+  if (held?.get(projectId)?.active) return fn();
 
-  return createProvisionLock(projectRuntimeLockKey(projectId)).run(() => {
-    const next = new Set(held ?? []);
-    next.add(projectId);
-    return heldProjectRuntimeLocks.run(next, fn);
+  return createProvisionLock(projectRuntimeLockKey(projectId)).run(async () => {
+    const scope = { active: true };
+    const next = new Map(held);
+    next.set(projectId, scope);
+    try {
+      return await heldProjectRuntimeLocks.run(next, fn);
+    } finally {
+      // A detached deployment inherits the async context, not ownership of a
+      // lock that its request has already released. It must reacquire normally.
+      scope.active = false;
+    }
   });
 }
 

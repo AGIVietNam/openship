@@ -22,6 +22,9 @@ export async function getCheckout(c: Context) {
   });
 }
 export async function getResources(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.getResources(operationContext(c))) }); }
+export async function getCapacity(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.getCapacity(operationContext(c))) }); }
+export async function previewCapacity(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.previewCapacity(operationContext(c), await c.req.json())) }); }
+export async function applyCapacity(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.applyCapacity(operationContext(c), await c.req.json())) }, 202); }
 export async function getSubscription(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.getSubscription(operationContext(c))) }); }
 export async function createSubscription(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.createSubscription(operationContext(c), await c.req.json())) }, 201); }
 export async function cancelSubscription(c: Context) { return c.json({ data: await operationData(c, getPlatformKernel().billing.cancelSubscription(operationContext(c))) }); }

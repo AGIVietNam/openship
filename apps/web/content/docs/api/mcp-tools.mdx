@@ -5,7 +5,7 @@ description: Generated tool descriptions, API mappings, availability, and intent
 
 This catalog is generated from the route metadata used by MCP discovery. Run `tools/list` against your instance for its current input schemas and the tools available to your credential. See [MCP setup](/docs/mcp), [protocol and arguments](/docs/api/mcp), and the [cluster/scaling workflow](/docs/guides/mcp-clusters-and-scaling).
 
-The current API has **424 unique tools**. Permission tags below describe the route's initial authority; shared operations also enforce workspace, resource, source-access and instance-admin requirements. Self-hosted tools are unavailable on the hosted Cloud controller.
+The current API has **427 unique tools**. Permission tags below describe the route's initial authority; shared operations also enforce workspace, resource, source-access and instance-admin requirements. Self-hosted tools are unavailable on the hosted Cloud controller.
 
 ## Tools
 
@@ -35,7 +35,7 @@ The current API has **424 unique tools**. Permission tags below describe the rou
 | `delete_apps_custom_by_appId`<br />`DELETE /api/apps/custom/:appId` | Remove a custom app from this org's catalog. | `project:write` |
 | `get_apps_catalog`<br />`GET /api/apps/catalog` | List the one-click app catalog (Convex, WordPress, mail, …). | `project:list` |
 | `get_apps_catalog_by_id`<br />`GET /api/apps/catalog/:id` | Get one app's full template (services, config, endpoints) by id. | `project:list` |
-| `get_apps_catalog_by_id_host_fit`<br />`GET /api/apps/catalog/:id/host-fit` | Check whether a destination meets an app's declared minimum resources, before installing. Query: deployTarget, serverId. | `project:list` |
+| `get_apps_catalog_by_id_host_fit`<br />`GET /api/apps/catalog/:id/host-fit` | Preview app capacity before installing. Self-hosted minimums are advisory; Cloud checks the shared workspace allocation against the plan. Pass projectId to include an existing draft's saved resource settings. Query: deployTarget, serverId, projectId. | `project:list` |
 | `get_apps_custom`<br />`GET /api/apps/custom` | List this org's custom (user-uploaded, unverified) apps. | `project:list` |
 | `get_projects_by_id_app_connection`<br />`GET /api/projects/:id/app-connection` | Get an installed app's resolved connection details (URLs + generated keys). | `project:write` |
 | `get_projects_by_id_app_settings`<br />`GET /api/projects/:id/app-settings` | Get an installed app's curated settings schema + current values. | `project:read` |
@@ -89,11 +89,14 @@ The current API has **424 unique tools**. Permission tags below describe the rou
 | Tool and HTTP route | Description | Access |
 | --- | --- | --- |
 | `get_billing_allowances`<br />`GET /api/billing/allowances` | List resources consuming workspace allowances, including the projects holding managed domains. | `billing:read` |
+| `get_billing_capacity`<br />`GET /api/billing/capacity` | Read the Cloud pool's allocated CPU, memory and disk, and authorized project allocations. Includes stopped workspaces. Read this again after an adjustment to verify capacity release. | `billing:read` |
 | `get_billing_resources`<br />`GET /api/billing/resources` | List Cloud resources contributing to this workspace’s bill and usage. | `billing:read` |
 | `get_billing_state`<br />`GET /api/billing/state` | Read the workspace’s Cloud billing state, current plan, balance and limits. Self-hosted instances need a connected Cloud account for this data. | `billing:read` |
 | `get_billing_subscription`<br />`GET /api/billing/subscription` | Read the workspace’s current subscription tier, state and billing period. | `billing:read` |
 | `get_billing_topup_packs`<br />`GET /api/billing/topup-packs` | List available Cloud credit packs and prices. Reading this does not buy credits. | `billing:read` |
 | `get_billing_usage`<br />`GET /api/billing/usage` | Read metered Cloud usage over the requested date range, grouped by hour or day. This is billing data, not live workload metrics. | `billing:read` |
+| `post_billing_capacity_apply`<br />`POST /api/billing/capacity/apply` | Apply a reviewed capacity adjustment with explicit restart confirmation. Reuses deployed images through normal deployment logs. Requires project and service write access. Reuse the idempotency key for retries; poll the returned deployment and capacity before retrying a blocked deploy. | `billing:write` |
+| `post_billing_capacity_preview`<br />`POST /api/billing/capacity/preview` | Preview service resource edits and the services that may restart. Requires project and service write access, and the revision from capacity. Does not apply changes. | `billing:read` |
 
 ### cloud-local
 
@@ -180,7 +183,7 @@ The current API has **424 unique tools**. Permission tags below describe the rou
 | Tool and HTTP route | Description | Access |
 | --- | --- | --- |
 | `delete_github_repos_by_owner_by_repo_webhooks`<br />`DELETE /api/github/repos/:owner/:repo/webhooks` | Delete a repository webhook identified by body.hookId. Read the repository webhook list first; removing it can stop automatic deployments. | `github:admin` |
-| `get_github_connect_poll`<br />`GET /api/github/connect/poll` | Read progress of an existing self-hosted GitHub device authorization. The user must complete GitHub’s browser approval; polling does not grant access. | `github:read`<br />Self-hosted |
+| `get_github_connect_poll`<br />`GET /api/github/connect/poll` | Read a GitHub connection attempt using its returned state, or self-hosted device authorization without a state. Completion means the requested connection committed; polling never grants access. | `github:read` |
 | `get_github_home`<br />`GET /api/github/home` | GitHub home: connection state, accounts, and repos in one call. | `github:read` |
 | `get_github_local_status`<br />`GET /api/github/local-status` | Read this self-hosted controller’s GitHub identity status and any connection problem. Local here means the Openship controller, not the MCP client. | `github:read`<br />Self-hosted |
 | `get_github_orgs_by_org_repos`<br />`GET /api/github/orgs/:org/repos` | List repositories in a GitHub org/account. | `github:list` |
@@ -193,7 +196,7 @@ The current API has **424 unique tools**. Permission tags below describe the rou
 | `get_github_repos_by_owner_by_repo_webhooks`<br />`GET /api/github/repos/:owner/:repo/webhooks` | List a repo's webhooks (to check push auto-deploy wiring). | `github:list` |
 | `get_github_sources`<br />`GET /api/github/sources` | List configured self-hosted GitHub App sources and their connection status without private keys. Requires workspace-owner access. | `github:admin`<br />Self-hosted |
 | `get_github_status`<br />`GET /api/github/status` | GitHub connection status for the org. | `github:read` |
-| `post_github_connect`<br />`POST /api/github/connect` | Start GitHub authorization and return the supported redirect, device-code or terminal flow. Give the returned URL/code to the user; do not claim connection until GitHub status confirms it. Browser approval remains outside MCP. | `github:write` |
+| `post_github_connect`<br />`POST /api/github/connect` | Start GitHub connection and return a redirect, installation selection, device code, or token instructions. Let the user complete approval in Openship or GitHub. For redirects with completion=attempt, poll using the returned state; existing connection status does not confirm a new installation. | `github:write` |
 | `post_github_repos_by_owner_by_repo_webhooks`<br />`POST /api/github/repos/:owner/:repo/webhooks` | Register Openship’s deployment webhook for this repository. Prefer the project auto-deploy tool when configuring an existing project; it chooses the correct delivery strategy. | `github:write` |
 | `post_github_sources_by_id_verify`<br />`POST /api/github/sources/:id/verify` | Verify a configured self-hosted GitHub App source and refresh its health status. Does not create an installation or return its credentials. | `github:admin`<br />Self-hosted |
 
@@ -563,6 +566,7 @@ Every remaining route has an explicit boundary: browser authorization, streaming
 | `GET /api/analytics/usage/stream` | SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming. |
 | `GET /api/auth/*` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
 | `POST /api/auth/*` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
+| `GET /api/auth/callback/github` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
 | `GET /api/auth/cloud-callback` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
 | `GET /api/auth/desktop-auth-poll` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
 | `POST /api/auth/desktop-auth-start` | Authentication, credential issuance or MCP transport. These modules cannot become tools. |
@@ -622,7 +626,14 @@ Every remaining route has an explicit boundary: browser authorization, streaming
 | `POST /api/cloud/resource-proxy` | Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead. |
 | `GET /api/cloud/route-registry` | Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead. |
 | `POST /api/cloud/send-invitation` | Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead. |
+| `POST /api/cloud/support` | Public Cloud support intake, including customers who cannot sign in. Only returns a receipt; no ticket data can be read anonymously. |
+| `GET /api/cloud/support/tickets` | Cloud support operator API. Requires the instance's internal token; never available to customer organization owners. |
+| `GET /api/cloud/support/tickets/:id` | Cloud support operator API. Requires the instance's internal token; never available to customer organization owners. |
+| `PATCH /api/cloud/support/tickets/:id` | Cloud support operator API. Requires the instance's internal token; never available to customer organization owners. |
+| `POST /api/cloud/support/tickets/:id/replies` | Cloud support operator API. Requires the instance's internal token; never available to customer organization owners. |
+| `POST /api/cloud/support/tickets/:id/retry` | Cloud support operator API. Requires the instance's internal token; never available to customer organization owners. |
 | `POST /api/cloud/teardown-project` | Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead. |
+| `POST /api/cloud/telemetry` | Optional hosted dashboard product telemetry; validates the exact Origin and associates only verified cookie sessions. Not an SDK/MCP operation. |
 | `POST /api/cloud/token` | Internal Cloud relay or browser credential handoff. Use the authenticated project, domain, GitHub, analytics and Cloud status tools instead. |
 | `POST /api/deployments/:id/build` | Legacy start-by-deployment-ID adapter. Start or redeploy through /api/deployments or /api/deployments/build/access. |
 | `GET /api/deployments/:id/stream` | SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming. |
@@ -631,7 +642,7 @@ Every remaining route has an explicit boundary: browser authorization, streaming
 | `POST /api/domains/:id/verify/stream` | SSE transport for live progress. Use the resource’s JSON status/log tools over MCP, or an authenticated HTTP client for streaming. |
 | `GET /api/github/connect/redirect` | GitHub OAuth callback - no session yet during redirect |
 | `POST /api/github/disconnect` | GitHub credential ownership and App installation are configured by the workspace owner in Settings → GitHub. Use connect/status for an existing supported connection flow. |
-| `POST /api/github/installations/claim` | GitHub credential ownership and App installation are configured by the workspace owner in Settings → GitHub. Use connect/status for an existing supported connection flow. |
+| `POST /api/github/installations/claim` | The browser completes GitHub authorization and selects an installation. Use connect/status to start and inspect the connection. |
 | `POST /api/github/instance-token` | GitHub credential ownership and App installation are configured by the workspace owner in Settings → GitHub. Use connect/status for an existing supported connection flow. |
 | `POST /api/github/repos` | GitHub repository creation is outside deployment management. Create repositories through GitHub, then deploy with Openship. |
 | `DELETE /api/github/repos/:owner/:repo` | Deleting the upstream GitHub repository is outside deployment management. Openship project removal does not delete source repositories. |

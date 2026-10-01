@@ -51,6 +51,7 @@ export interface PinnedArtifactSnapshot extends SnapshotClassInput {
   strictServiceScope?: boolean;
   refreshServiceIds?: string[];
   forcePullImages?: boolean;
+  capacityAdjustment?: { key: string; requestHash: string };
   composeServices?: Array<{
     name: string;
     enabled?: boolean;
@@ -107,6 +108,14 @@ export function hasPinnedArtifacts(snapshot: PinnedArtifactSnapshot | null | und
   return Object.values(snapshot?.handoverImages ?? {}).some((ref) => !!nonEmpty(ref));
 }
 
+/** Only strict refreshes promise not to fall back to building. Ordinary
+ * rollback/migration pins may be reclaimed, so they still reserve build capacity. */
+export function strictRefreshImages(snapshot: PinnedArtifactSnapshot): Readonly<Record<string, string>> | undefined {
+  return snapshot.strictServiceScope && snapshot.targetServiceIds?.length &&
+    snapshot.targetServiceIds.every(id => snapshot.refreshServiceIds?.includes(id))
+    ? snapshot.handoverImages : undefined;
+}
+
 /** Strip every one-shot artifact and execution hint before a new native deploy. */
 export function withoutPinnedArtifacts<T extends PinnedArtifactSnapshot>(snapshot: T): T {
   const {
@@ -118,6 +127,7 @@ export function withoutPinnedArtifacts<T extends PinnedArtifactSnapshot>(snapsho
     strictServiceScope: _strictScope,
     refreshServiceIds: _refreshServices,
     forcePullImages: _forcePull,
+    capacityAdjustment: _capacityAdjustment,
     ...rest
   } = snapshot;
   return rest as T;

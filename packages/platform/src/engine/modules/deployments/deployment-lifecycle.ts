@@ -200,6 +200,7 @@ export async function reportPipelineError(
   ctx: LifecycleContext,
   message: string,
   logger: Pick<BuildLogger, "log">,
+  errorMeta?: { errorCode?: string; errorDetails?: Record<string, unknown> },
 ): Promise<void> {
   if (ctx.settled) {
     console.warn(
@@ -214,7 +215,7 @@ export async function reportPipelineError(
   // onFailure owns the one canonical terminal error line. Give it this logger
   // for recovery/test contexts that did not construct the normal pipeline ctx.
   ctx.logger ??= logger;
-  await onFailure(ctx, message);
+  await onFailure(ctx, message, undefined, errorMeta);
 }
 
 function truncateError(msg: string): string {

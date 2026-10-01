@@ -13,6 +13,7 @@ import {
   INITIAL_STATE,
   resolveBuildElapsedMs,
   type DeploymentContextType,
+  type DeploymentConfig,
 } from "./types";
 
 const api = vi.hoisted(() => ({
@@ -20,16 +21,17 @@ const api = vi.hoisted(() => ({
   redeploy: vi.fn(),
   cancel: vi.fn(),
   toast: vi.fn(),
+  ensure: vi.fn(), buildAccess: vi.fn(), getEnv: vi.fn(), pricing: vi.fn(),
   callbacks: {} as Record<string, (...args: any[]) => void>,
   stream: { isConnected: true, connect: vi.fn(), disconnect: vi.fn() },
 }));
 
 vi.mock("@/lib/api", () => ({
-  deployApi: { getBuildStatus: api.status, buildRedeploy: api.redeploy, cancel: api.cancel },
-  projectsApi: {},
+  deployApi: { getBuildStatus: api.status, buildRedeploy: api.redeploy, cancel: api.cancel, buildAccess: api.buildAccess },
+  projectsApi: { ensure: api.ensure, getEnv: api.getEnv },
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => ({ showToast: api.toast }) }));
-vi.mock("@/hooks/useCloudDeployPricing", () => ({ useCloudDeployPricing: () => () => false }));
+vi.mock("@/hooks/useCloudDeployPricing", () => ({ useCloudDeployPricing: () => api.pricing }));
 vi.mock("@/hooks/useProjectEndpoints", () => ({ invalidateProjectCaches: vi.fn() }));
 vi.mock("@/context/CloudContext", () => ({ useCloud: () => ({}) }));
 vi.mock("@/context/PlatformContext", () => ({
@@ -69,8 +71,8 @@ let build: ReturnType<typeof useDeploymentBuild>;
 let root: Root;
 let container: HTMLDivElement;
 
-function Harness() {
-  const [config, setConfig] = useState(DEFAULT_CONFIG);
+function Harness({ initial = {} }: { initial?: Partial<DeploymentConfig> }) {
+  const [config, setConfig] = useState({ ...DEFAULT_CONFIG, ...initial });
   build = useDeploymentBuild(config, setConfig);
   return (
     <DeploymentContext.Provider value={{ config, ...build } as DeploymentContextType}>
@@ -79,11 +81,11 @@ function Harness() {
   );
 }
 
-async function mount() {
+async function mount(initial?: Partial<DeploymentConfig>) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root.render(<Harness />));
+  await act(async () => root.render(<Harness initial={initial} />));
 }
 
 async function load(extra: Record<string, unknown> = {}) {
@@ -107,6 +109,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.stream.isConnected = true;
   api.status.mockResolvedValue(snapshot());
+  api.pricing.mockReturnValue(false);
 });
 
 afterEach(async () => {
@@ -114,6 +117,24 @@ afterEach(async () => {
   container?.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+it("retries capacity admission using the draft already created by the deployment wizard", async () => {
+  api.pricing.mockReturnValue(true);
+  api.ensure.mockResolvedValueOnce({ success: true, project_id: "original-draft", created: true })
+    .mockResolvedValue({ success: true, project_id: "original-draft", created: false });
+  api.buildAccess.mockRejectedValueOnce(new ApiError(409, "Capacity required", { code: "CLOUD_CAPACITY_REQUIRED", projectId: "original-draft" }))
+    .mockResolvedValue({ success: true, project_id: "original-draft", deployment_id: "recovered-deploy" });
+  api.getEnv.mockResolvedValue({ data: [] });
+  const navigate = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+  await mount({ isApp: true, framework: "node", projectName: "Original draft" });
+  await act(async () => { expect(await build.startDeployment()).toBeNull(); });
+  const retry = api.pricing.mock.calls[0]![1] as () => Promise<void>;
+  await act(async () => { await retry(); });
+  expect(api.ensure.mock.calls[1]![0]).toMatchObject({ projectId: "original-draft" });
+  expect(api.buildAccess.mock.calls.map(call => call[0].projectId)).toEqual(["original-draft", "original-draft"]);
+  expect(navigate).toHaveBeenCalledWith("/build/recovered-deploy");
 });
 
 describe("deployment counter (#919)", () => {

@@ -642,6 +642,8 @@ export function useDeploymentBuild(
 
   const startDeployment = useCallback(async (
     overrides?: {
+      /** Reuse the draft already created before a capacity refusal. */
+      projectId?: string;
       runtimeMode?: DeploymentConfig["runtimeMode"];
       // Applied to THIS deploy's payload directly, bypassing async React state
       // — lets the clone-strategy gate flip build-local for the in-flight
@@ -726,7 +728,7 @@ export function useDeploymentBuild(
     // freshly-ensured project id — for first deploys, config.projectId is
     // still null at this point, which would disable the "Add a project
     // clone token" option.
-    let ensuredProjectId: string | null = config.projectId ?? null;
+    let ensuredProjectId: string | null = overrides?.projectId ?? config.projectId ?? null;
 
     try {
       // ── Save-only (Edit from the Runtime page): the project ALREADY exists,
@@ -783,7 +785,7 @@ export function useDeploymentBuild(
 
       // Step 1: Ensure project exists
       const projectData = await projectsApi.ensure({
-        projectId: config.projectId || undefined,
+        projectId: ensuredProjectId || undefined,
         name: config.projectName || config.repo || config.localPath?.split("/").pop() || "project",
         gitOwner: isSourceless ? undefined : config.owner || undefined,
         gitRepo: isSourceless ? undefined : config.repo || undefined,
@@ -1021,7 +1023,10 @@ export function useDeploymentBuild(
       if (shouldPromptCloudConnect({ errorCode, canConnectCloud, cloudConnected }) && cloudCapability) {
         const connected = await requireCloud(cloudCapability, { domain: baseDomain });
         if (!connected) showToast(message, "error", "Error");
-      } else if ((saveConfigOnly || !showCloudPricing(err)) && !maybeOpenCredentialModal(errorCode)) {
+      } else if ((saveConfigOnly || !showCloudPricing(err, async () => {
+        const id = await startDeployment({ ...overrides, projectId: ensuredProjectId ?? undefined });
+        if (id) window.location.assign(`/build/${encodeURIComponent(id)}`);
+      })) && !maybeOpenCredentialModal(errorCode)) {
         // Clone-token / credential preflight failures open the missing-credential
         // modal (concrete recovery) instead of a dead-end toast.
         showToast(message, "error", "Error");
@@ -1533,7 +1538,10 @@ export function useDeploymentBuild(
         // A missing GitHub credential surfaces the SAME modal as the deploy
         // wizard (never a bare toast) — one shared handler, one source of truth.
         const openedModal =
-          showCloudPricing(error) || maybeOpenCredentialModal(extractErrorCode(error) ?? undefined);
+          showCloudPricing(error, async () => {
+            const id = await redeploy(deploymentId);
+            if (id) window.location.assign(`/build/${encodeURIComponent(id)}`);
+          }) || maybeOpenCredentialModal(extractErrorCode(error) ?? undefined);
         if (!openedModal) showToast(msg, "error", "Error");
         return null;
       } finally {

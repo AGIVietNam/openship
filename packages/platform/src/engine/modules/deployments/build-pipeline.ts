@@ -41,15 +41,16 @@ import {
   edgeProxyFor,
 } from "@repo/adapters";
 import { platform } from "../../lib/platform-config";
-import { cloudDockerResources, ensureCloudDockerWorkspace, usesCloudDockerWorkspace } from "../../lib/cloud-docker-workspace";
+import { cloudDockerNeedsBuild, reconcileCloudDockerWorkspace, cloudDockerResources, ensureCloudDockerWorkspace, usesCloudDockerWorkspace } from "../../lib/cloud-docker-workspace";
 import { assertCloudDeploymentLimits } from "../../lib/plan-guard";
+import { cloudCapacityFailure } from "../../lib/cloud-capacity";
 import {
   resolveUpstreamUrl,
   resolveRouteStrategy,
   usesHostLoopbackUpstream,
 } from "../../lib/upstream-url";
 import { compileProjectRoutingFields } from "../../lib/project-routing-fields";
-import { webhookProxyTarget } from "../../config/index";
+import { env, webhookProxyTarget } from "../../config/index";
 import {
   disposeRuntime,
   resolveDeploymentRuntime,
@@ -137,8 +138,10 @@ import {
   pinnedStaticDir,
   refreshAppDeploymentId,
   snapshotNeedsGitSource,
+  strictRefreshImages,
 } from "./pinned-artifacts";
 import { snapshotToClass } from "./deployment-class";
+import { prepareCloudBuildResources } from "./cloud-build-resources";
 import { shouldRetainArtifact } from "./rollback/restore-plan";
 import { resolveClonePlan } from "./clone-plan";
 import { collapseTerminalLogs } from "./terminal-logs";
@@ -214,6 +217,18 @@ export async function resolveServicePipelineMode(
     return { useSingleAppPipeline: true, useServicePipeline: false, servicePreflightServices: [] };
   }
 
+  // A failed catalog install can reach this path directly from Retry. Seed only
+  // missing draft profiles before reading/finalizing the next snapshot; an
+  // explicit or restored service snapshot must keep its original allocation.
+  if (
+    project.appTemplateId &&
+    !project.activeDeploymentId &&
+    !snapshot.composeServices?.length &&
+    (env.CLOUD_MODE || snapshot.deployTarget === "cloud")
+  ) {
+    const { ensureDraftAppResourceDefaults } = await import("../apps/app-resource-defaults");
+    await ensureDraftAppResourceDefaults(project);
+  }
   const [servicePreflightServices, useServicePipeline] = await Promise.all([
     resolveProjectServicePreflightServices(project.id, snapshot.composeServices),
     shouldUseProjectServicePipeline(project, snapshot.composeServices),
@@ -341,7 +356,11 @@ async function markDeploymentFailedFromOutside(
       // `updateStatus(id, "failed")` below would erase that distinction.
       return;
     }
-    await repos.deployment.updateStatus(deploymentId, "failed").catch(() => {});
+    const capacityError = cloudCapacityFailure(error, dep.projectId);
+    await repos.deployment.updateStatus(deploymentId, "failed", {
+      errorMessage: capacityError?.message ?? message,
+      ...(capacityError ? { errorCode: capacityError.code, errorDetails: capacityError.details } : {}),
+    }).catch(() => {});
     const buildSession = await repos.deployment
       .findBuildSessionByDeploymentId(deploymentId)
       .catch(() => null);
@@ -652,6 +671,8 @@ async function executeBuildAndDeploy(
     provisioned,
   };
 
+  let settledDockerResources: ResourceConfig | undefined;
+  let buildResourcesForRecovery: ResourceConfig | null | undefined;
   try {
     // Decide the runtime modes as DATA (no mutate-then-undo). Two historical
     // flips, encoded in resolveBuildRuntimeModes: services → Docker (containers
@@ -661,19 +682,40 @@ async function executeBuildAndDeploy(
     // leak it). Cloud static + Docker-less desktop-local static keep their own mode.
     const serviceMode = await resolveServicePipelineMode(project, snapshot);
     const willRunServices = serviceMode.useServicePipeline;
+    const dockerWorkspace =
+      willRunServices &&
+      resolveEffectiveTarget(plat.target, snapshot) === "cloud" &&
+      (await usesCloudDockerWorkspace(project, snapshot.serviceDeploymentMode));
     await assertCloudDeploymentLimits(dep.organizationId, {
       projectId: project.id,
       resources: snapshot.resources, buildResources: snapshot.buildResources,
       runsApplication: snapshotToClass(snapshot).workload !== "static",
       services: willRunServices ? serviceMode.servicePreflightServices : undefined,
+      dockerWorkspace,
+      retainedImages: strictRefreshImages(snapshot),
     });
-    if (willRunServices && resolveEffectiveTarget(plat.target, snapshot) === "cloud" &&
-        await usesCloudDockerWorkspace(project, snapshot.serviceDeploymentMode)) {
+    const cloudBuild = await prepareCloudBuildResources({ project, snapshot,
+      services: willRunServices ? serviceMode.servicePreflightServices : undefined, dockerWorkspace });
+    buildResourcesForRecovery = cloudBuild?.build ?? null;
+    if (cloudBuild) {
+      for (const [name, allocation] of Object.entries(cloudBuild.services ?? { build: cloudBuild.build })) {
+        logger.log(`→ Cloud ${name} build: ${allocation.cpuCores} vCPU · ${allocation.memoryMb} MB, selected from the pool's available capacity.\n`);
+      }
+    }
+    if (dockerWorkspace) {
+      settledDockerResources = cloudDockerResources({
+        resources: snapshot.resources,
+        services: serviceMode.servicePreflightServices.map((service) => ({
+          enabled: service.enabled,
+          resources: service.advanced?.resources,
+        })),
+      });
       logger.log("→ Preparing the project's shared Docker workspace on Openship Cloud.\n");
       snapshot.cloudDockerWorkspace = await ensureCloudDockerWorkspace({
         projectId: project.id, organizationId: dep.organizationId,
-        resources: cloudDockerResources({
+        resources: cloudBuild?.workspace ?? cloudDockerResources({
           resources: snapshot.resources, buildResources: snapshot.buildResources,
+          reserveBuild: !env.CLOUD_MODE && cloudDockerNeedsBuild(serviceMode.servicePreflightServices, strictRefreshImages(snapshot)),
           services: serviceMode.servicePreflightServices.map(service => ({
             enabled: service.enabled,
             resources: service.advanced?.resources,
@@ -807,7 +849,7 @@ async function executeBuildAndDeploy(
     // on both is what pinned every self-hosted container to 512 MB.
     const isCloudDeploy = resolveEffectiveTarget(plat.target, snapshot) === "cloud";
     const prodResources = resolveRuntimeResources(snapshot.resources, { isCloud: isCloudDeploy });
-    const buildResources = resolveBuildResources(snapshot.buildResources, {
+    const buildResources = cloudBuild?.build ?? resolveBuildResources(snapshot.buildResources, {
       isCloud: isCloudDeploy,
     });
 
@@ -1111,7 +1153,7 @@ async function executeBuildAndDeploy(
       // alongside the real monorepo row (no DB unique constraint on
       // (projectId, name)). Filter to compose-kind before handing it off.
       const composeOnly = snapshot.composeServices?.filter((s) => serviceKind(s) === "compose");
-      if (composeOnly?.length) {
+      if (composeOnly?.length && !snapshot.capacityAdjustment) {
         // removeMissing: false — this list is the release's frozen snapshot, not
         // an authoritative inventory. On a rollback it predates services added
         // since; on any deploy the delete cascades `service_deployment` and so
@@ -1146,6 +1188,7 @@ async function executeBuildAndDeploy(
           composeInterpolationEnv: envMap,
           buildEnvVars: buildEnv.envVars,
           buildResources,
+          serviceBuildResources: cloudBuild?.services ?? (env.CLOUD_MODE ? {} : undefined),
           runtimeResources: prodResources,
           gitToken: gitCred.token,
           gitCredentialHelperPath: composeRelay?.scriptPath,
@@ -1294,6 +1337,8 @@ async function executeBuildAndDeploy(
     }
 
     if (buildResult.status === "failed") {
+      const capacityError = cloudCapacityFailure(buildResult.errorCause, project.id, buildResourcesForRecovery);
+      if (capacityError) throw capacityError;
       await onFailure(ctx, buildResult.errorMessage ?? "Build failed", buildResult.durationMs);
       return;
     }
@@ -1315,6 +1360,7 @@ async function executeBuildAndDeploy(
     // target lock; inferring that again inside the phase risks a nested lock when
     // a restored release changes the effective serve mode.
     const hostPortTargetLockHeld =
+      usesManagedRouting &&
       deployRouting.deployMode === "server" &&
       resolved.effectiveTarget !== "cloud" &&
       usesHostLoopbackUpstream(resolveRouteStrategy(project.routeStrategy), runtime);
@@ -1385,13 +1431,29 @@ async function executeBuildAndDeploy(
     // Only an UNSETTLED error is a deploy failure. An error thrown after the
     // outcome was recorded is bookkeeping: reporting it as a failure would
     // invert a working deploy and tear its containers down.
-    await reportPipelineError(ctx, message, logger);
+    const capacityError = cloudCapacityFailure(err, project.id, buildResourcesForRecovery);
+    await reportPipelineError(ctx, capacityError?.message ?? message, logger, capacityError
+      ? { errorCode: capacityError.code, errorDetails: capacityError.details } : undefined);
   } finally {
     // The deploy is over either way — release the loopback bridges it opened.
     // Safe here and not earlier: the readiness/stabilization gate runs INLINE as
     // the pipeline's healthCheck hook, so nothing still needs a transport once
     // this function settles.
     for (const rt of transports) disposeRuntime(rt);
+    if (settledDockerResources) {
+      try {
+        // ensure may resize/create successfully and then lose its response.
+        // Its durable binding still identifies the host whose build allocation
+        // must be released, even before the snapshot was updated.
+        const workspaceId = snapshot.cloudDockerWorkspace?.workspaceId ??
+          (await repos.cloudDockerWorkspace.find(project.id, dep.organizationId))?.workspaceId;
+        if (workspaceId) await reconcileCloudDockerWorkspace({ projectId: project.id, organizationId: dep.organizationId,
+          workspaceId, deploymentId: dep.id, resources: settledDockerResources,
+          onProgress: message => logger.log(message) });
+      } catch (error) {
+        logger.log(`Cloud capacity reconciliation is pending: ${error instanceof Error ? error.message : "provider unavailable"}\n`, "warn");
+      }
+    }
   }
 }
 
@@ -2109,7 +2171,7 @@ async function executeServerDeploy(phase: DeployPhaseInputs, deployConfig: Deplo
     Pick<AllocatedPinnedHostPort, "claim" | "previousClaim" | "claimWasCreated">
   > = [];
   const needsHostLoopbackClaim =
-    usesHostLoopback && !isStaticFileServe && !isWorker && phase.effectiveTarget !== "cloud";
+    usesManagedRouting && usesHostLoopback && !isStaticFileServe && !isWorker && phase.effectiveTarget !== "cloud";
   if (needsHostLoopbackClaim && (!phase.hostPortTarget || !phase.targetExecutor)) {
     throw new Error("Cannot inspect routed host ports without a physical target executor");
   }

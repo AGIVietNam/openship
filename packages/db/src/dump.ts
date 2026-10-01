@@ -756,6 +756,11 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * whole-instance export that claims to carry "every migration-managed table".
  */
 export const EXCLUDED_TABLES: Record<string, string> = {
+  cloud_support_ticket: "Private Cloud support requests; never export one customer's correspondence to another installation",
+  cloud_support_message: "Private Cloud support correspondence and mail delivery state",
+  cloud_analytics_event: "Cloud-only telemetry delivery and deduplication; never migrate into a local installation",
+  cloud_analytics_checkout: "Cloud-only analytics checkout correlation",
+  cloud_analytics_workspace: "Cloud-only analytics subscription snapshots",
   platform_instance: "the receiving installation retains its own identity and encryption-key binding",
   // Ephemeral / in-flight — re-created on demand, meaningless on another host.
   build_session: "in-flight build state; a migration never resumes a build mid-flight",
@@ -765,7 +770,7 @@ export const EXCLUDED_TABLES: Record<string, string> = {
   verification: "Better Auth one-shot nonces, all short-TTL",
   domain_dns_challenge: "temporary ACME order and worker lease; start a new TXT challenge after an instance transfer",
   acme_account: "instance-bound ACME account signing keys; the destination registers its own account without changing installed certificates",
-  github_install_state: "one-shot install nonce, deleted on callback",
+  github_install_state: "short-lived GitHub connection attempts, purged after expiry",
   cloud_handoff_code: "60s one-time cloud-connect codes",
   data_transfer_session: "short-lived whole-instance transfer capability and upload lease",
   data_transfer_chunk: "short-lived chunk staging for a whole-instance transfer",
@@ -944,6 +949,7 @@ export const ENCRYPTED_COLUMNS: ReadonlyArray<EncryptedColumnSpec> = [
   { table: "cluster_database", column: "envValueEncrypted" },
   { table: "user_settings", column: "cloudSessionToken" },
   { table: "user_settings", column: "cloneTokenEncrypted" },
+  { table: "user_settings", column: "githubAuthorizationEncrypted" },
   { table: "project", column: "cloneTokenEncrypted" },
   { table: "project", column: "webhookSecret" },
   { table: "cloud_webhook_binding", column: "webhookSecret" },

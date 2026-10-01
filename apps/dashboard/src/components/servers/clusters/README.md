@@ -81,8 +81,8 @@ floating footer or independently scrolling panels. Direct access checks
 self-hosted capabilities and fleet management permission. Active verification and
 unsettled managed operations block competing edits.
 
-Setup and editing respect the normal sidebar preference. Automatic collapse is
-reserved for canvas views.
+Setup and editing respect the normal sidebar preference. Within network management,
+automatic collapse is reserved for canvas views.
 
 The native adoption wizard reuses the add-server modal and the existing network inspection
 endpoint. **Detect network settings** reads selected servers through the shared

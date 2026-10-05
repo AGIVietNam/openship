@@ -66,3 +66,4 @@ next-env.d.ts
 docs/ssh-audit
 docs/research
 .playwright-mcp/
+docs/plan/

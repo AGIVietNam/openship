@@ -414,7 +414,7 @@ export const CreateProjectBody = Type.Object({
   ),
   port: Type.Optional(Type.Number({ minimum: 1, maximum: 65535 })),
   /** Public routes for the project. An explicit `[]` clears them (no public route). */
-  publicEndpoints: Type.Optional(Type.Array(PublicEndpointSchema, { maxItems: 20 })),
+  publicEndpoints: Type.Optional(Type.Array(PublicEndpointSchema)),
   hasServer: Type.Optional(Type.Boolean({ default: true })),
   hasBuild: Type.Optional(Type.Boolean({ default: true })),
   /**

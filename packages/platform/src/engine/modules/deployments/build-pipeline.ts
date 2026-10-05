@@ -1605,15 +1605,12 @@ interface ServeStrategy {
    */
   readiness?: (containerId: string, config: DeployConfig) => Promise<string | null>;
   /**
-   * Can `readiness` answer for a REMOTE target?
+   * Whether `readiness` can reach a non-local deployment.
    *
-   * false (running process): the probe dials a port from the orchestrator, and a
-   *   remote app's port isn't reachable from here — so it only runs for local.
-   * true (static file-serve): the probe goes through the routing provider, which
-   *   reaches the edge wherever it lives, so a remote server is fine.
-   *
-   * Without this the static check would be skipped on every remote deploy — i.e.
-   * exactly the deploys where a missing doc-root is hardest to notice.
+   * Static-output checks use the routing provider for every target.
+   * Running-process checks use the target executor on Server deployments.
+   * Omitted/false restricts this probe to local targets; stabilization is
+   * independent and can still reject remote deployments.
    */
   readinessWorksRemotely?: boolean;
 }
@@ -1663,10 +1660,12 @@ function buildDeployEnvironment(
     // When a project does opt in, up to two layers run:
     //
     //  1. Stabilization — watch the container we just started and fail if it
-    //     bounces or exits. Asked of the RUNTIME (docker inspect), so unlike the
-    //     TCP probe it works for remote/SSH targets too.
-    //  2. Readiness probe — local targets only; the app runs on this host, so a
-    //     refused/timed-out connection genuinely means it never came up.
+    //     bounces or exits. Asked of the RUNTIME (docker inspect), so it works
+    //     for remote/SSH targets too, independent of the probe below.
+    //  2. Readiness probe (TCP/HTTP) — dials the workload's port. Restricted to
+    //     a "local" target unless the serve strategy declares
+    //     `readinessWorksRemotely` for this target. For a running-process
+    //     workload, it then dials through the deploy target's own executor.
     //
     // `onFailure` decides what a failure means. "warn" (the default even when
     // opted in) keeps the deploy ready and records an action-required warning;
@@ -1699,9 +1698,8 @@ function buildDeployEnvironment(
                   ).filter((finding) => !finding.verdict.ok);
                   return unstable ? unstable.detail : null;
                 },
-            // A port probe dials from the orchestrator, so it only answers for a
-            // LOCAL target. The static file probe goes through the routing provider
-            // and reaches the edge anywhere, so it isn't restricted.
+            // Non-local probes must support the target's transport. Static-output
+            // checks always do; running-process checks support Server targets.
             probe:
               serve.readiness && (effectiveTarget === "local" || serve.readinessWorksRemotely)
                 ? () => serve.readiness!(containerId, cfg)
@@ -2149,6 +2147,9 @@ async function executeServerDeploy(phase: DeployPhaseInputs, deployConfig: Deplo
           }
           return verdict.failure;
         },
+        // The shared probe uses the server target's executor, as compose does.
+        // Cloud and cluster targets do not use this remote probe path.
+        readinessWorksRemotely: phase.effectiveTarget === "server",
       };
 
   // A worker serves through the running-process lifecycle (baseServe, since

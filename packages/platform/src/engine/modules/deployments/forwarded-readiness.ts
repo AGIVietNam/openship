@@ -27,8 +27,9 @@
  */
 
 import type { Duplex } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { waitForReady, type CommandExecutor } from "@repo/adapters";
-import { shellQuote } from "@repo/core";
+import { safeErrorMessage, shellQuote } from "@repo/core";
 
 interface ReadinessOptions {
   path?: string;
@@ -59,10 +60,6 @@ export interface ExecutorReadinessResult {
    * A caller must warn rather than fail on it.
    */
   unverifiable?: string;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -96,34 +93,47 @@ function openForward(
   host: string,
   port: number,
   timeoutMs: number,
-): Promise<{ stream: Duplex | null; error?: unknown }> {
-  return new Promise((resolve) => {
+  signal?: AbortSignal,
+): Promise<Duplex> {
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => {
+    const cleanup = () => {
       settled = true;
-      resolve({ stream: null });
-    }, timeoutMs);
-    timer.unref?.();
-
-    forward(host, port).then(
-      (stream) => {
-        if (settled) {
-          stream.destroy();
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve({ stream });
-      },
-      // The rejection is KEPT, not discarded: it is the only place the difference
-      // between "refused to forward" and "nothing listening yet" exists.
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve({ stream: null, error });
-      },
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => fail(signal?.reason);
+    const timer = setTimeout(
+      () => fail(new Error("timed out opening the SSH forwarding channel")),
+      timeoutMs,
     );
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    Promise.resolve()
+      .then(() => forward(host, port))
+      .then(
+        (stream) => {
+          if (settled) {
+            stream.destroy();
+            return;
+          }
+          cleanup();
+          resolve(stream);
+        },
+        // The rejection is KEPT, not discarded: it is the only place the difference
+        // between "refused to forward" and "nothing listening yet" exists.
+        fail,
+      );
   });
 }
 
@@ -134,6 +144,7 @@ function probeHttpStream(
   path: string,
   timeoutMs: number,
   acceptStatusBelow: number,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
@@ -142,11 +153,14 @@ function probeHttpStream(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       stream.destroy();
       resolve(ok);
     };
+    const onAbort = () => done(false);
     const timer = setTimeout(() => done(false), timeoutMs);
     timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     stream.on("data", (chunk) => {
       received += chunk.toString("latin1");
@@ -162,7 +176,7 @@ function probeHttpStream(
     stream.once("error", () => done(false));
     stream.once("end", () => done(false));
 
-    if (!isProbePathSafe(path)) {
+    if (signal?.aborted || !isProbePathSafe(path)) {
       done(false);
       return;
     }
@@ -170,12 +184,16 @@ function probeHttpStream(
   });
 }
 
-/** Poll readiness from the machine represented by an SSH direct-tcpip channel. */
+/**
+ * Poll readiness from the machine represented by an SSH direct-tcpip channel.
+ * Rejects when the channel cannot give a verdict on the app.
+ */
 export async function waitForForwardedReady(
   forward: PortForwarder,
   host: string,
   port: number,
   opts: ReadinessOptions = {},
+  signal?: AbortSignal,
 ): Promise<ForwardedReadinessResult> {
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const intervalMs = opts.intervalMs ?? 1_000;
@@ -183,37 +201,50 @@ export async function waitForForwardedReady(
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
+    signal?.throwIfAborted();
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { ready: false };
-    const attempt = await openForward(forward, host, port, Math.min(probeTimeoutMs, remaining));
-    if (attempt.error && isForwardingProhibited(attempt.error)) {
-      const detail = (attempt.error as { message?: unknown }).message;
-      return {
-        ready: false,
-        prohibited: typeof detail === "string" ? detail : "channel open refused by the server",
-      };
-    }
-    if (attempt.stream) {
-      if (!opts.path) {
-        attempt.stream.destroy();
-        return { ready: true };
+    let stream: Duplex | undefined;
+    try {
+      stream = await openForward(forward, host, port, Math.min(probeTimeoutMs, remaining), signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (isForwardingProhibited(error)) {
+        const detail = (error as { message?: unknown }).message;
+        return {
+          ready: false,
+          prohibited: typeof detail === "string" ? detail : "channel open refused by the server",
+        };
       }
-      if (
-        await probeHttpStream(
-          attempt.stream,
+      // Only SSH_OPEN_CONNECT_FAILED proves the host tried to reach the app.
+      // A handshake error, exhausted SSH resources, or a tunnel-open timeout
+      // says nothing about the app and must not trigger a failed deployment.
+      if (!error || typeof error !== "object" || (error as { reason?: unknown }).reason !== 2) {
+        throw error;
+      }
+    }
+    if (stream) {
+      let ready: boolean;
+      if (!opts.path) {
+        stream.destroy();
+        ready = true;
+      } else {
+        ready = await probeHttpStream(
+          stream,
           host,
           port,
           opts.path,
           Math.min(probeTimeoutMs, Math.max(1, deadline - Date.now())),
           opts.acceptStatusBelow ?? 500,
-        )
-      ) {
-        return { ready: true };
+          signal,
+        );
       }
+      signal?.throwIfAborted();
+      if (ready) return { ready: true };
     }
     const waitMs = Math.min(intervalMs, deadline - Date.now());
     if (waitMs <= 0) return { ready: false };
-    await delay(waitMs);
+    await delay(waitMs, undefined, { signal });
   }
 }
 
@@ -352,12 +383,28 @@ export async function waitForReadyFromExecutor(
   }
 
   const startedAt = Date.now();
-  const forwarded = await waitForForwardedReady(
-    executor.forwardPort.bind(executor),
-    host,
-    port,
-    opts,
-  );
+  const disconnected = new AbortController();
+  const unsubscribe = executor.onDisconnect?.((error) => disconnected.abort(error));
+  let forwarded: ForwardedReadinessResult;
+  try {
+    forwarded = await waitForForwardedReady(
+      executor.forwardPort.bind(executor),
+      host,
+      port,
+      opts,
+      disconnected.signal,
+    );
+    disconnected.signal.throwIfAborted();
+  } catch (error) {
+    const cause = disconnected.signal.aborted ? disconnected.signal.reason : error;
+    return {
+      ready: false,
+      via: "forward",
+      unverifiable: `could not probe through the host's SSH connection: ${safeErrorMessage(cause)}`,
+    };
+  } finally {
+    unsubscribe?.();
+  }
   if (!forwarded.prohibited) return { ready: forwarded.ready, via: "forward" };
 
   // The fallback inherits what is LEFT of the budget, not a fresh copy of it: the caller

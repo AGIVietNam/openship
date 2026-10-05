@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { request } from "node:http";
-import { connect, createServer } from "node:net";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +23,8 @@ import {
   type KubernetesObject,
 } from "@repo/adapters";
 import { allocateClusterRuntimeRanges } from "@repo/core";
+import { freePort } from "./free-port";
+export { freePort } from "./free-port";
 
 const REPO = join(import.meta.dirname, "../../../..");
 export const SCALING_K3S_IMAGE = "rancher/k3s:v1.36.4-k3s1";
@@ -34,21 +36,6 @@ const HTPASSWD = "openship-e2e:$2y$05$mzY7ng06oTJrMnt171U4Z.WDLE4qtkUSSP8WyNPTHe
 const REGISTRY_IMAGE = "registry:2.8.3";
 const sq = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const ports = new Set<number>();
-export async function freePort(): Promise<string> {
-  const port = await new Promise<number>((resolve, reject) => {
-    const listener = createServer();
-    listener.once("error", reject);
-    listener.listen(0, "127.0.0.1", () => {
-      const port = (listener.address() as { port: number }).port;
-      listener.close((error) => (error ? reject(error) : resolve(port)));
-    });
-  });
-  if (ports.has(port)) return freePort();
-  ports.add(port);
-  return String(port);
-}
-
 export async function eventually<T>(
   description: string,
   read: () => Promise<T>,

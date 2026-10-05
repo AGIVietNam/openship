@@ -74,12 +74,12 @@ describe("publicEndpoints — empty set", () => {
     expect(ensure([])).toBe(true);
   });
 
-  it("still accepts a populated array and rejects more than 20 entries", () => {
-    const tooMany = Array.from({ length: 21 }, () => endpoint);
+  it("accepts a populated array, including more than 20 entries (issue #1018)", () => {
+    const many = Array.from({ length: 21 }, () => endpoint);
     expect(create([endpoint])).toBe(true);
-    expect(create(tooMany)).toBe(false);
-    expect(update(tooMany)).toBe(false);
-    expect(ensure(tooMany)).toBe(false);
+    expect(create(many)).toBe(true);
+    expect(update(many)).toBe(true);
+    expect(ensure(many)).toBe(true);
   });
 });
 

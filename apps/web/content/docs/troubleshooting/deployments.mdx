@@ -104,16 +104,20 @@ Deploy again.
 ## The app isn't listening on the right port
 
 <Callout type="error">
-The build finishes, then the deploy fails at the end with:
-`Health check failed: the app never accepted a connection on port 3000 within 45s — it likely crashed on
-startup (check the runtime logs).`
+The build finishes, then an enabled readiness check reports that the app never answered at its
+published address within the configured timeout.
 </Callout>
 
-**What it means** — after starting your app, Openship waits up to 45 seconds for it to accept a
-connection on the configured port (the default is `3000`). If nothing ever answers, either the app
-crashed on startup or it's listening on a *different* port than the one Openship expects. This readiness
-gate runs for **Local** deploys; on a remote **Server** or **Cloud** the symptom instead is that the app
-builds and starts but the URL never responds.
+**What it means** — when `readiness.enabled` is `true`, Openship waits for your app to accept a TCP
+connection, or return an HTTP status below 500 at the configured `path`. The default timeout is 45
+seconds. If nothing answers, the app may have crashed, still be starting, or be listening on a
+different port. For single-app deployments, checks run on **Local** and **Server** targets using the
+deployment host's own connection. With the default `onFailure: "warn"`, the deployment stays live
+with a warning. Only `onFailure: "fail"` rejects the deployment through the existing rollback handling.
+
+If SSH fails or the probe cannot run, the log explicitly reports a **skipped** check and leaves the
+deployment unverified. This is not evidence that the app is unhealthy: check the deployment host's
+SSH connection and retry. This single-app probe is skipped on **Cloud** and **cluster** targets.
 
 **How to fix it**
 

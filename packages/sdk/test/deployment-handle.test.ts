@@ -108,4 +108,20 @@ describe("deployment handles", () => {
     async function* stream() { yield { event: "complete", data: JSON.stringify({ success: true }) }; }
     expect((await consumeDeploymentEvents(stream())).completed).toBe(false);
   });
+
+  it("closes the event source when an unattended caller hands back a prompt", async () => {
+    let closed = false;
+    async function* events() {
+      try {
+        yield { event: "prompt", data: JSON.stringify({ promptId: "p", title: "Decision required" }) };
+        throw new Error("Must not consume beyond the pending decision");
+      } finally { closed = true; }
+    }
+    const delivered = vi.fn();
+    const result = await consumeDeploymentEvents(events(), delivered, { stopOnPrompt: true });
+    expect(closed).toBe(true);
+    expect(delivered).toHaveBeenCalledOnce();
+    expect(result.completed).toBe(false);
+    expect(result.success).toBeUndefined();
+  });
 });

@@ -18,6 +18,7 @@
  */
 
 import type { Context } from "hono";
+import { AppError } from "@repo/core";
 import { getRequestContext } from "../../lib/request-context";
 import { auth } from "@repo/platform/engine/lib/auth";
 import { issueNamespaceToken } from "@repo/platform/engine/lib/openship-cloud";
@@ -138,16 +139,28 @@ export async function analyticsProxy(c: Context) {
 
 export async function getToken(c: Context) {
   const ctx = getRequestContext(c);
-  const result = await issueNamespaceToken(ctx.organizationId);
+  const result = await issueNamespaceToken(ctx.organizationId, null);
   return c.json({ data: result });
 }
 
 export async function preflight(c: Context) {
   const ctx = getRequestContext(c);
   const body = await c.req.json<{ slug?: string; customDomain?: string }>();
+  let workspaceId: string | null = null;
+  const serverId = c.req.query("serverId");
+  if (serverId) {
+    const { workspaceForServer } = await import("@repo/platform/engine/lib/cloud-workspace-scope");
+    const { authorization } = await import("@repo/platform/engine/lib/authorization");
+    const { workspace } = await workspaceForServer(ctx.organizationId, serverId);
+    if (!workspace) return c.json({ error: "Managed server not found" }, 404);
+    await authorization.authorize(ctx, { resourceType: "server", resourceId: serverId, action: "write" });
+    workspaceId = workspace.id;
+  }
   const result = await runCloudPreflight(ctx.organizationId, {
     slug: body.slug,
     customDomain: body.customDomain,
+    // This relay serves linked instances, whose provider token has this scope.
+    workspaceId,
   });
   return c.json({ data: result });
 }
@@ -194,6 +207,8 @@ export async function account(c: Context) {
 
   return c.json({
     user: {
+      id: getRequestContext(c).userId,
+      organizationId: getRequestContext(c).organizationId,
       name: user.name ?? user.email,
       email: user.email,
       image: user.image ?? null,
@@ -540,7 +555,7 @@ export async function checkEdgeVerification(c: Context) {
  *   - `workspace_id` must belong to the caller's namespace (or 404)
  *   - `slug` must be free on the shared zone (or 409 SLUG_TAKEN)
  *
- * Returns the raw Oblien SDK shape so the caller's CloudRuntime code
+ * Returns the raw Oblien SDK shape so the caller's infrastructure adapter
  * path stays unchanged.
  */
 export async function pagesProxy(c: Context) {
@@ -685,14 +700,25 @@ export async function sendInvitation(c: Context) {
  * ingestSubgraph.
  */
 export async function ingestSubgraphHandler(c: Context) {
+  return handleSubgraphIngest(c, false);
+}
+
+export async function promoteProjectHandler(c: Context) {
+  return handleSubgraphIngest(c, true);
+}
+
+async function handleSubgraphIngest(c: Context, promotion: boolean) {
   const ctx = getRequestContext(c);
   const body = await c.req.json<{
     dump?: DatabaseDump;
     allowNonEmptyTarget?: boolean;
+    promotionId?: string;
   }>();
   if (!body.dump) {
     return c.json({ error: "dump is required" }, 400);
   }
+  if (promotion && (typeof body.promotionId !== "string" || !body.promotionId))
+    return c.json({ error: "promotionId is required", code: "INGEST_VALIDATION_FAILED" }, 400);
   if (body.dump.formatVersion !== DUMP_FORMAT_VERSION) {
     return c.json(
       {
@@ -707,9 +733,11 @@ export async function ingestSubgraphHandler(c: Context) {
       organizationId: ctx.organizationId,
       dump: body.dump,
       allowNonEmptyTarget: body.allowNonEmptyTarget,
+      ...(promotion && { promotion: { id: body.promotionId!, userId: ctx.userId } }),
     });
     return c.json({ ok: true, ...result });
   } catch (err) {
+    if (err instanceof AppError) throw err;
     if (err instanceof IngestTargetNotEmptyError) {
       return c.json(
         { error: err.message, code: err.code, projectCount: err.projectCount },

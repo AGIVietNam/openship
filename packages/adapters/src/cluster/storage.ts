@@ -16,7 +16,7 @@ import {
   waitForClusterResource,
 } from "./database-addons";
 import { patchKubernetesObject } from "./kubernetes-mutation";
-import type { KubernetesApi, KubernetesObject } from "./kubernetes-api";
+import { KubernetesApiError, type KubernetesApi, type KubernetesObject } from "./kubernetes-api";
 import type { ClusterDatabaseBackupStorage } from "./database-backups";
 import { runClusterJob } from "./job";
 import { StorageProbe } from "./storage-probe";
@@ -439,8 +439,34 @@ export class ClusterStorageAdapter {
     );
     if (namespace && !namespace.metadata.deletionTimestamp && volumes) {
       const confirmation = `${longhornBase}/settings/deleting-confirmation-flag`;
-      if (await clusterObject(this.api, confirmation, this.signal))
-        await patchKubernetesObject(
+      let setting = await clusterObject(this.api, confirmation, this.signal);
+      if (!setting) {
+        // Longhorn reads its default (false) when this Setting is absent. A
+        // missing record must be created before starting the native uninstaller.
+        await this.fence();
+        try {
+          setting = await this.api.request<KubernetesObject>(
+            "POST",
+            `${longhornBase}/settings`,
+            {
+              apiVersion: "longhorn.io/v1beta2",
+              kind: "Setting",
+              metadata: {
+                name: "deleting-confirmation-flag",
+                namespace: LONGHORN_NAMESPACE,
+              },
+              value: "true",
+            },
+            this.signal,
+          );
+        } catch (error) {
+          // The manager may have created the default concurrently. Re-read and
+          // patch that record; ambiguous transport failures are not replayed.
+          if (!(error instanceof KubernetesApiError) || error.statusCode !== 409) throw error;
+        }
+      }
+      if (setting?.value !== "true")
+        setting = await patchKubernetesObject(
           this.api,
           confirmation,
           async () => {
@@ -448,6 +474,10 @@ export class ClusterStorageAdapter {
             return { value: "true" };
           },
           this.signal,
+        );
+      if (setting.value !== "true")
+        throw conflict(
+          "Longhorn did not confirm storage removal. The installation was left in place.",
         );
       // The pinned native uninstaller removes controllers/finalizers in order.
       for (const object of uninstall) {

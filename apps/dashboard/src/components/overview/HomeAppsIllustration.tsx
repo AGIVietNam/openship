@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { AppLogo } from "@/components/AppLogo";
+import type { AppCatalogEntry } from "@/lib/api/apps";
 import styles from "./HomeAppsIllustration.module.css";
 
 const FEATURED_APPS = [
@@ -27,12 +29,21 @@ const TILES = [
   { position: "end-0 top-8 size-7 -rotate-6", logo: "size-4" },
 ];
 
-export default function HomeAppsIllustration() {
+export default function HomeAppsIllustration({
+  suggestions,
+  loading = false,
+}: {
+  suggestions?: readonly Pick<AppCatalogEntry, "id" | "name">[];
+  loading?: boolean;
+}) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const interactive = suggestions !== undefined;
   // The first render stays deterministic for SSR; later swaps happen only on screen.
   const [apps, setApps] = useState(() => FEATURED_APPS.slice(0, TILES.length));
 
   useEffect(() => {
+    // Clickable recommendations stay in place so choosing a logo never changes its target.
+    if (interactive) return;
     const element = rootRef.current;
     if (!element || typeof IntersectionObserver === "undefined") return;
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -73,11 +84,23 @@ export default function HomeAppsIllustration() {
       document.removeEventListener("visibilitychange", sync);
       motion.removeEventListener("change", sync);
     };
-  }, []);
+  }, [interactive]);
+
+  if (interactive && !loading && suggestions.length === 0) return null;
 
   return (
-    <div ref={rootRef} aria-hidden="true" className="relative mx-auto mb-2 h-16 w-full max-w-56">
-      <svg className="absolute inset-0 size-full rtl:-scale-x-100" viewBox="0 0 224 64" fill="none">
+    <div
+      ref={rootRef}
+      aria-hidden={interactive ? undefined : true}
+      aria-busy={loading || undefined}
+      className="relative mx-auto mb-2 h-16 w-full max-w-56"
+    >
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 size-full rtl:-scale-x-100"
+        viewBox="0 0 224 64"
+        fill="none"
+      >
         <path
           d="M14 42L58 22L118 34L168 16L210 46"
           stroke="var(--th-on-12)"
@@ -89,19 +112,37 @@ export default function HomeAppsIllustration() {
         <circle cx="84" cy="54" r="2" fill="var(--th-on-08)" />
         <circle cx="194" cy="8" r="2.5" fill="var(--th-on-10)" />
       </svg>
-      {TILES.map((tile, index) => (
-        <div
-          key={index}
-          className={`absolute flex items-center justify-center rounded-xl bg-card shadow-sm ring-1 ring-border/60 ${tile.position}`}
-        >
+      {TILES.map((tile, index) => {
+        const suggestion = suggestions?.[index];
+        if (interactive && !suggestion && !loading) return null;
+        const appId = suggestion?.id ?? apps[index];
+        const tileClass = `absolute flex items-center justify-center rounded-xl bg-card shadow-sm ring-1 ring-border/60 ${tile.position}`;
+        const logo = loading ? (
+          <span className={`rounded-md bg-muted motion-safe:animate-pulse ${tile.logo}`} />
+        ) : (
           <span
-            key={apps[index]}
+            key={appId}
             className={`flex items-center justify-center rounded-md ${tile.logo} ${styles.logo}`}
           >
-            <AppLogo appId={apps[index]} className="size-full" />
+            <AppLogo appId={appId} className="size-full" />
           </span>
-        </div>
-      ))}
+        );
+        return suggestion && !loading ? (
+          <Link
+            key={index}
+            href={`/apps/new?app=${encodeURIComponent(suggestion.id)}`}
+            aria-label={suggestion.name}
+            title={suggestion.name}
+            className={`${tileClass} motion-safe:transition-transform hover:z-10 motion-safe:hover:-translate-y-1 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+          >
+            {logo}
+          </Link>
+        ) : (
+          <div key={index} aria-hidden="true" className={tileClass}>
+            {logo}
+          </div>
+        );
+      })}
     </div>
   );
 }

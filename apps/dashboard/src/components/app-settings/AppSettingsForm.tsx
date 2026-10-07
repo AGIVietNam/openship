@@ -18,8 +18,7 @@ import { cn } from "@/lib/utils";
 import { CustomSelect } from "@/components/ui/CustomSelect";
 import { Input, inputVariants } from "@/components/ui/input";
 
-/** A catalog app whose template exposes curated (schema) settings — drives the
- *  "App settings" mode of the Configuration tab + the install-wizard step. */
+/** A catalog app with curated fields for project Settings and the install wizard. */
 export function isSchemaAppTemplate(appTemplateId?: string): boolean {
   if (!appTemplateId) return false;
   const tpl = getAppTemplate(appTemplateId);

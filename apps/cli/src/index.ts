@@ -1,8 +1,9 @@
 import { Command, CommanderError } from "commander";
-import { err, setJsonMode } from "./lib/output";
+import { err, isJsonMode, setJsonMode } from "./lib/output";
 import { initializeNativeClient } from "./lib/native-client";
-import { closeNativeClient, cliUserAgent } from "./lib/ship-client";
+import { closeNativeClient, cliUserAgent, setCommandOrganization } from "./lib/ship-client";
 import { CommandExit } from "./lib/command-exit";
+import { withCommandContext } from "./lib/config";
 
 // Auth & session
 import { loginCommand } from "./commands/login";
@@ -30,6 +31,13 @@ import { appCommand } from "./commands/app";
 import { serviceCommand } from "./commands/service";
 import { domainCommand } from "./commands/domain";
 import { edgeCommand } from "./commands/edge";
+import { monitoringCommand } from "./commands/monitoring";
+import { credentialCommand } from "./commands/credential";
+import { dnsCommand } from "./commands/dns";
+import { notificationCommand } from "./commands/notification";
+import { webhookCommand } from "./commands/webhook";
+import { auditCommand } from "./commands/audit";
+import { accessCommand } from "./commands/access";
 
 // Self-host infrastructure
 import { serverCommand } from "./commands/server";
@@ -60,6 +68,12 @@ import { attachCompletion } from "./commands/completion";
 declare const __CLI_VERSION__: string;
 
 const program = new Command();
+const sdkCommands = new Set([
+  projectCommand, appCommand, serviceCommand, domainCommand, deployCommand,
+  deploymentCommand, logsCommand, initCommand, serverCommand, systemCommand,
+  backupCommand, jobCommand, statusCommand, doctorCommand, monitoringCommand,
+  credentialCommand, dnsCommand, notificationCommand, webhookCommand, auditCommand, accessCommand, tokenCommand,
+]);
 
 program
   .name("openship")
@@ -67,14 +81,19 @@ program
   .version(__CLI_VERSION__)
   .exitOverride()
   .option("--json", "Machine-readable JSON output (stdout data only)")
+  .option("--organization <id>", "Use a fixed organization scope for SDK resource commands (remote only)")
   .option("--native-config <file>", "Run SDK commands using an explicitly trusted JavaScript configuration")
   .hook("preAction", async (thisCommand, actionCommand) => {
     if (thisCommand.opts().json) setJsonMode(true);
+    let top = actionCommand;
+    while (top.parent && top.parent !== thisCommand) top = top.parent;
     const file = thisCommand.opts().nativeConfig as string | undefined;
+    const organization = thisCommand.opts().organization as string | undefined;
+    if (organization !== undefined && (file || !sdkCommands.has(top)))
+      throw new Error("Use --organization with remote SDK resource commands. Native organization selection belongs in --native-config.");
+    setCommandOrganization(organization);
     if (file) {
-      let top = actionCommand;
-      while (top.parent && top.parent !== thisCommand) top = top.parent;
-      if (!["project", "app", "service", "domain", "deploy", "deployment", "logs", "init", "server", "system", "backup", "job", "status", "doctor"].includes(top.name()))
+      if (!sdkCommands.has(top))
         throw new Error("Choose an SDK resource command with --native-config; installation and remote-login commands use a remote context.");
       await initializeNativeClient(file, cliUserAgent);
     }
@@ -82,6 +101,9 @@ program
   // Bare `openship` (no subcommand): setup wizard on a fresh box, or the control
   // panel once a service is already installed (manage instead of starting over).
   .action(async () => {
+    if (process.stdin.isTTY !== true || isJsonMode()) {
+      throw new Error("Choose a command for non-interactive use. Run openship --help to see the available commands.");
+    }
     // A service is installed AND setup finished → manage it. If a prior setup
     // was interrupted (service installed but never completed), resume the wizard
     // instead of showing the control panel as if the install were done.
@@ -122,6 +144,13 @@ program.addCommand(appCommand);
 program.addCommand(serviceCommand);
 program.addCommand(domainCommand);
 program.addCommand(edgeCommand);
+program.addCommand(monitoringCommand);
+program.addCommand(credentialCommand);
+program.addCommand(dnsCommand);
+program.addCommand(notificationCommand);
+program.addCommand(webhookCommand);
+program.addCommand(auditCommand);
+program.addCommand(accessCommand);
 
 // Self-host infrastructure (secondary)
 program.addCommand(serverCommand);
@@ -155,7 +184,7 @@ async function main() {
   const native = process.argv.some(arg => arg === "--native-config" || arg.startsWith("--native-config="));
   if (native) { process.on("SIGINT", interrupt); process.on("SIGTERM", terminate); }
   try {
-    await program.parseAsync();
+    await withCommandContext(() => program.parseAsync());
   } catch (error) {
     if (interrupted) return;
     if (error instanceof CommandExit) process.exitCode = error.code;

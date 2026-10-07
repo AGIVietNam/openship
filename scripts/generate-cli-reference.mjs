@@ -5,9 +5,10 @@ import { fileURLToPath } from "node:url";
 import { cliSurface, docsDirectory } from "./docs-surface.mjs";
 
 const categories = {
-  Connect: ["login", "logout", "context", "token", "api"],
+  Connect: ["login", "logout", "context", "token", "access", "credential", "api"],
   Deploy: ["init", "config", "deploy", "deployment", "logs"],
-  Applications: ["project", "app", "service", "domain"],
+  Applications: ["project", "app", "service", "domain", "dns"],
+  Operations: ["monitoring", "notification", "webhook", "audit"],
   Infrastructure: ["job", "server", "backup", "edge", "mail", "system"],
   "Local installation": [
     "up",
@@ -27,6 +28,13 @@ const guides = {
   logout: "access",
   context: "access",
   token: "access",
+  access: "access",
+  credential: "access",
+  dns: "projects",
+  monitoring: "operations",
+  notification: "operations",
+  webhook: "operations",
+  audit: "operations",
   api: "access",
   init: "projects",
   config: "projects",

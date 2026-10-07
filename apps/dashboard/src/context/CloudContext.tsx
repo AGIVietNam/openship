@@ -7,11 +7,13 @@ import {
   useContext,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { cloudApi } from "@/lib/api";
+import { useSession } from "@/lib/auth-client";
 import { defaultDomainType } from "@/lib/default-domain-type";
 import {
   getCloudConnectHandoffUrl,
@@ -26,12 +28,18 @@ import { Button } from "@/components/ui/button";
 import { openAuthWindow } from "@/utils/authWindow";
 import type { CloudCapability } from "@repo/core";
 import { useCloudCapabilityCopy, type CloudRequirementPrompt } from "./cloud/capability-copy";
+import { CloudResourceContext } from "./CloudResourceContext";
+import { useRouter } from "next/navigation";
+import { setApiResourceScope } from "@/lib/api/client";
+import { clearProjectEndpointCaches } from "@/hooks/useProjectEndpoints";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
 /* ------------------------------------------------------------------ */
 
 interface CloudUser {
+  id?: string;
+  organizationId?: string;
   name: string;
   email: string;
   image?: string | null;
@@ -99,7 +107,8 @@ const FEATURES = [
 ];
 
 export function CloudProvider({ children }: { children: ReactNode }) {
-  const { selfHosted, deployMode, cloudAuthUrl, cloudApiUrl } = usePlatform();
+  const router = useRouter();
+  const { selfHosted, deployMode, cloudApiUrl } = usePlatform();
   const canConnectCloud = canUseCloudConnection({ selfHosted, deployMode });
   const hasNativeCloudAccess = !canConnectCloud;
   // GitHubProvider is an ancestor of CloudProvider (see providers.tsx),
@@ -108,9 +117,17 @@ export function CloudProvider({ children }: { children: ReactNode }) {
   const { refresh: refreshGitHub } = useGitHub();
   const cloudCapabilityCopy = useCloudCapabilityCopy();
 
-  const [connected, setConnected] = useState(false);
-  const [cloudUser, setCloudUser] = useState<CloudUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: session } = useSession();
+  const contextKey = `${session?.user.id ?? "local"}:${session?.session.activeOrganizationId ?? ""}`;
+  const contextRef = useRef(contextKey);
+  contextRef.current = contextKey;
+  const statusRequest = useRef(0);
+  const [status, setStatus] = useState<{ contextKey: string; connected: boolean; user: CloudUser | null } | null>(null);
+  const [checking, setChecking] = useState(true);
+  const current = status?.contextKey === contextKey;
+  const connected = current && status.connected;
+  const cloudUser = current ? status.user : null;
+  const loading = canConnectCloud && (!current || checking);
   const [connecting, setConnecting] = useState(false);
   const [modalFeature, setModalFeature] = useState<CloudRequirementPrompt | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -119,37 +136,38 @@ export function CloudProvider({ children }: { children: ReactNode }) {
   // legitimately settle together on the same outcome. Drained atomically.
   const pendingRef = useRef<Array<(v: boolean) => void>>([]);
 
-  // Clean up polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  // Check cloud status on mount (self-hosted / desktop only)
-  const checkStatus = useCallback(async () => {
+  // Ignore replies from a previous account/org and from superseded requests.
+  const checkStatus = useCallback(async (): Promise<boolean> => {
+    if (contextRef.current !== contextKey) return false;
+    const request = ++statusRequest.current;
     if (!canConnectCloud) {
-      setConnected(true);
-      setCloudUser(null);
-      setLoading(false);
-      return;
+      setStatus({ contextKey, connected: true, user: null });
+      setChecking(false);
+      return true;
     }
+    setChecking(true);
     try {
-      setLoading(true);
       const res = await cloudApi.status();
-      setConnected(res?.connected ?? false);
-      setCloudUser(res?.user ?? null);
+      if (contextRef.current !== contextKey || statusRequest.current !== request) return false;
+      setStatus({ contextKey, connected: res?.connected ?? false, user: res?.user ?? null });
+      return res?.connected === true;
     } catch {
-      setConnected(false);
-      setCloudUser(null);
+      if (contextRef.current === contextKey && statusRequest.current === request)
+        setStatus({ contextKey, connected: false, user: null });
+      return false;
     } finally {
-      setLoading(false);
+      if (contextRef.current === contextKey && statusRequest.current === request) setChecking(false);
     }
-  }, [canConnectCloud]);
+  }, [canConnectCloud, contextKey]);
 
-  useEffect(() => {
-    checkStatus();
-  }, [checkStatus]);
+  useEffect(() => { void checkStatus(); }, [checkStatus]);
+
+  const setConnected = useCallback((value: boolean) => {
+    if (value) { void checkStatus(); return; }
+    ++statusRequest.current;
+    setStatus({ contextKey, connected: false, user: null });
+    setChecking(false);
+  }, [checkStatus, contextKey]);
 
   // Listen for the popup's "cloud-connect-success" postMessage so we
   // refresh status the instant the callback page reports finalize OK,
@@ -162,25 +180,14 @@ export function CloudProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    async function refreshOnce() {
-      try {
-        const res = await cloudApi.status();
-        const isConnected = res?.connected === true;
-        setConnected(isConnected);
-        setCloudUser(res?.user ?? null);
-        return isConnected;
-      } catch {
-        return false;
-      }
-    }
     function onMessage(e: MessageEvent) {
       if (e.origin !== window.location.origin) return;
       if (e.data && typeof e.data === "object" && e.data.type === "cloud-connect-success") {
-        void refreshOnce().then((ok) => {
-          if (ok) return;
+        void checkStatus().then((ok) => {
+          if (ok || contextRef.current !== contextKey) return;
           // First refresh said "still disconnected" — try once more
           // after a settle window in case of a propagation race.
-          retryTimer = setTimeout(() => void refreshOnce(), 600);
+          retryTimer = setTimeout(() => void checkStatus(), 600);
         });
       }
     }
@@ -189,29 +196,28 @@ export function CloudProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("message", onMessage);
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, []);
+  }, [checkStatus, contextKey]);
 
   const isConnected = hasNativeCloudAccess || connected;
+  const resourceKey = `${contextKey}:${hasNativeCloudAccess ? "native" : !current ? "pending"
+    : connected ? `${cloudApiUrl}:${cloudUser?.id ?? cloudUser?.email ?? ""}:${cloudUser?.organizationId ?? ""}` : "disconnected"}`;
+  // Layout effects run before resource hooks start their passive fetches.
+  useLayoutEffect(() => {
+    setApiResourceScope(resourceKey);
+    clearProjectEndpointCaches();
+  }, [resourceKey]);
 
-  // GitHub `cloud-app` mode is backed by the cloud session: connecting or
-  // disconnecting Openship Cloud changes which GitHub auth mode resolves
-  // and whether a token is available. So whenever the cloud connection
-  // TRANSITIONS, re-resolve GitHub state — this is the single wiring point
-  // that keeps the GitHub card honest across every connect/disconnect path
-  // (settings button, modal, popup postMessage, desktop poll), not just one.
-  //
-  // The `loading` gate skips the in-flight initial status check so we don't
-  // fire a spurious refresh on mount (GitHub already has its SSR data); the
-  // first SETTLED value becomes the baseline, and only real changes after
-  // that trigger a GitHub refresh.
-  const prevConnectedRef = useRef<boolean | null>(null);
+  // Refresh account-backed UI after connect, disconnect or a different Cloud
+  // identity. The first settled status keeps the server-rendered baseline.
+  const previousResourceKey = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
-    const prev = prevConnectedRef.current;
-    prevConnectedRef.current = isConnected;
-    if (prev === null || prev === isConnected) return;
+    const prev = previousResourceKey.current;
+    previousResourceKey.current = resourceKey;
+    if (prev === null || prev === resourceKey) return;
     void refreshGitHub();
-  }, [isConnected, loading, refreshGitHub]);
+    router.refresh();
+  }, [resourceKey, loading, refreshGitHub, router]);
 
   // Settle every pending requireCloud promise once, then clear the batch
   // atomically (reassign before calling, so a resolver that re-enters can't
@@ -221,6 +227,18 @@ export function CloudProvider({ children }: { children: ReactNode }) {
     pendingRef.current = [];
     resolvers.forEach((resolve) => resolve(value));
   }, []);
+
+  useEffect(() => {
+    setModalFeature(null);
+    setConnecting(false);
+    previousResourceKey.current = null;
+    return () => {
+      ++statusRequest.current;
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+      settlePendingCloud(false);
+    };
+  }, [contextKey, settlePendingCloud]);
 
   // A successful connect flips `isConnected` true (via checkStatus / the
   // postMessage refresh / the desktop poll). Whichever path gets there, resolve
@@ -308,6 +326,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
     setConnecting(true);
     try {
       const result = await desktop.cloud.connect();
+      if (contextRef.current !== contextKey) return;
       if (!result?.ok) {
         setConnecting(false);
         return;
@@ -319,11 +338,12 @@ export function CloudProvider({ children }: { children: ReactNode }) {
       pollRef.current = setInterval(async () => {
         try {
           const poll = await desktop.cloud.connectPoll(nonce);
+          if (contextRef.current !== contextKey) return;
           if (poll.status === "resolved") {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
             await checkStatus();
-            setConnecting(false);
+            if (contextRef.current === contextKey) setConnecting(false);
           } else if (poll.status === "expired") {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
@@ -337,6 +357,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
             }
           }
         } catch {
+          if (contextRef.current !== contextKey) return;
           errorCount++;
           if (errorCount >= 5) {
             if (pollRef.current) clearInterval(pollRef.current);
@@ -346,9 +367,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
         }
       }, 2000);
     } catch {
-      setConnecting(false);
+      if (contextRef.current === contextKey) setConnecting(false);
     }
-  }, [checkStatus]);
+  }, [checkStatus, contextKey]);
 
   /** Browser popup connect flow */
   const startBrowserConnect = useCallback(() => {
@@ -357,8 +378,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
     // setup resolves.
     const handle = openAuthWindow();
     prepareConnectUrl()
-      .then((url) => handle.navigate(url))
+      .then((url) => contextRef.current === contextKey ? handle.navigate(url) : handle.close())
       .catch((error) => {
+        if (contextRef.current !== contextKey) { handle.close(); return; }
         // Never silently close the popup. Self-hosted dashboards are often
         // served over private-LAN HTTP, where browser security APIs differ
         // from HTTPS. Keep the window open with an actionable local error if
@@ -367,7 +389,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
         handle.navigate(`${window.location.origin}/cloud-connect-callback?setup_error=pkce`);
       });
     handle.onClose(() => checkStatus());
-  }, [prepareConnectUrl, checkStatus]);
+  }, [prepareConnectUrl, checkStatus, contextKey]);
 
   /** Start cloud connect - auto-detects desktop vs browser */
   const startConnect = useCallback(() => {
@@ -385,9 +407,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 
   return (
     <CloudContext.Provider
-      value={{ connected: isConnected, cloudUser, loading, connecting, requireCloud, startConnect, refresh: checkStatus, setConnected }}
+      value={{ connected: isConnected, cloudUser, loading, connecting, requireCloud, startConnect, refresh: async () => { await checkStatus(); }, setConnected }}
     >
-      {children}
+      <CloudResourceContext.Provider value={resourceKey}>{children}</CloudResourceContext.Provider>
 
       {/* ── Connect Modal ──────────────────────────────────── */}
       {modalFeature && (

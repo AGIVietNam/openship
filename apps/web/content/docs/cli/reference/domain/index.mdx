@@ -25,6 +25,9 @@ openship domain [options] [command]
 | [`renew <id>`](/docs/cli/reference/domain#openship-domain-renew) | Renew the SSL certificate for a domain |
 | [`verify-ssl <id>`](/docs/cli/reference/domain#openship-domain-verify-ssl) | Recheck that a domain's SSL certificate is issued and valid (no reissue) |
 | [`renew-all`](/docs/cli/reference/domain#openship-domain-renew-all) | Renew SSL for every near-expiry domain in your organization |
+| [`dns`](/docs/cli/reference/domain/dns#openship-domain-dns) | Plan and apply provider-managed DNS records |
+| [`get <id>`](/docs/cli/reference/domain#openship-domain-get) | Show a domain and its routing configuration |
+| [`remove\|rm [options] <id>`](/docs/cli/reference/domain#openship-domain-remove) | Remove a domain and its managed route |
 
 ## openship domain add
 
@@ -42,6 +45,18 @@ openship domain add [options] <hostname>
 | --- | --- |
 | `-p, --project <id>` | Project ID to attach the domain to |
 | `--primary` | Mark this domain as the project's primary (default: false) |
+
+## openship domain get
+
+Show a domain and its routing configuration
+
+```text
+openship domain get [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Domain ID |
 
 ## openship domain list
 
@@ -90,6 +105,22 @@ openship domain records [options] <id>
 | Argument | Meaning |
 | --- | --- |
 | `id` | Domain ID |
+
+## openship domain remove
+
+Remove a domain and its managed route
+
+```text
+openship domain remove|rm [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Domain ID |
+
+| Option | Meaning |
+| --- | --- |
+| `-y, --yes` | Skip confirmation |
 
 ## openship domain renew
 

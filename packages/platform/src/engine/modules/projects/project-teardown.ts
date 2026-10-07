@@ -154,6 +154,9 @@ export interface TeardownOptions {
    * runtime + rows but must NOT delete the webhook.
    */
   preserveWebhook?: boolean;
+  /** Protect configuration writes and validate a confirmed transfer snapshot
+   * after the deletion claim, before any destructive cleanup. */
+  validateConfiguration?: () => Promise<void>;
   /**
    * Record-only ("soft") delete: drop just the Openship DB record and LEAVE the
    * server workload + data + on-server manifest intact, so the project can be
@@ -254,7 +257,9 @@ async function teardownProjectLocked(
   // The advisory lock is the real owner; this boolean is an admission signal for
   // DB/runtime writers. Re-setting an old `true` is intentional crash recovery:
   // no live teardown can own it while this caller holds the advisory lock.
-  const claimed = await repos.project.claimDeletion(projectId);
+  const claimed = opts.validateConfiguration
+    ? await repos.project.claimDeletion(projectId, { protectConfiguration: true })
+    : await repos.project.claimDeletion(projectId);
   if (!claimed) {
     let existing: Project | undefined;
     try {
@@ -354,7 +359,7 @@ async function teardownProjectLocked(
     // the Openship record. NEVER honored for a cloud project — its resources
     // live on Oblien and must be reclaimed; this is the security boundary, not
     // the UI toggle. (CLOUD_MODE = the SaaS itself, where nothing is "kept".)
-    const recordOnly = !!opts.recordOnly && !project.cloudWorkspaceId && !env.CLOUD_MODE;
+    const recordOnly = !!opts.recordOnly && !project.workspaceId && !env.CLOUD_MODE;
 
     // ── Step 1: Cancel in-flight work (force=true or forceOrphan). ───────
     // Cancellation only requests/records the stop here. Runtime cleanup happens
@@ -395,6 +400,8 @@ async function teardownProjectLocked(
       }
       push({ step: "cancel_in_flight", status: "skipped", details: "nothing in flight" });
     }
+
+    await opts.validateConfiguration?.();
 
     // ── Step 2: Unregister GitHub webhook (unless preserving it). ────────
     // promote-to-cloud keeps the webhook: the cloud copy auto-deploys via the
@@ -862,13 +869,13 @@ async function stepRuntimeCleanup(
   // else goes through the normal destroy path.
   const unreachable = manifest.resources.filter((r) => r.type === "unreachable");
   const destroyable = manifest.resources.filter((r) => r.type !== "unreachable");
-  if (forceOrphan && manifest.runtimes?.some((runtime) => runtime.name === "kubernetes")) {
+  if (forceOrphan && (project.workspaceId || manifest.runtimes?.some((runtime) => runtime.name === "kubernetes"))) {
     disposeManifestRuntimes(manifest);
     push({
       step: "runtime_cleanup",
       status: "failed",
       error:
-        "Cluster workloads require confirmed cleanup. Retry deletion with the cluster reachable instead of orphaning its resources.",
+        "Managed workloads require confirmed cleanup. Retry deletion with the workspace or cluster reachable instead of orphaning its resources.",
     });
     return { orphans, forceOrphanEligible: false };
   }
@@ -878,7 +885,7 @@ async function stepRuntimeCleanup(
       serverId: r.serverId ?? null,
       targetKey: r.targetKey ?? null,
       resourceType:
-        r.deferredResourceType ?? (r.runtimeMode === "cloud" ? "cloud_workspace" : "container"),
+        r.deferredResourceType ?? "container",
       ref: r.ref,
       label: r.label,
       runtimeMode: r.runtimeMode ?? null,
@@ -999,13 +1006,11 @@ async function stepRuntimeCleanup(
         label: r.label,
         runtimeMode:
           r.runtimeMode ??
-          (r.runtime?.name === "cloud"
-            ? "cloud"
-            : r.runtime?.name === "bare"
-              ? "bare"
-              : r.runtime?.name === "docker"
-                ? "docker"
-                : (legacyTarget?.runtimeMode ?? null)),
+          (r.runtime?.name === "bare"
+            ? "bare"
+            : r.runtime?.name === "docker"
+              ? "docker"
+              : (legacyTarget?.runtimeMode ?? null)),
         payload: r.payload ?? null,
       });
     }

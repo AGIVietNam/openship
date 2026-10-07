@@ -55,6 +55,7 @@
     "appsEmptyDesc": "En un clic, entièrement auto-hébergé — bases de données, automatisation, analytique, coffres de mots de passe et plus encore, sur vos propres serveurs."
   },
   "nav": {
+    "support": "Assistance",
     "scale": "Mise à l’échelle",
     "home": "Accueil",
     "new-project": "Nouveau projet",
@@ -74,6 +75,7 @@
     "addMailbox": "Ajouter une boîte aux lettres",
     "webmail": "Webmail",
     "sections": {
+      "help": "Aide",
       "main": "Principal",
       "settings": "Paramètres",
       "infrastructure": "Infrastructure",
@@ -83,7 +85,8 @@
       "account": "Compte"
     },
     "apps": "Applications",
-    "jobs": "Tâches"
+    "jobs": "Tâches",
+    "workspaces": "Espaces de travail"
   },
   "sidebar": {
     "expand": "Développer la barre latérale",

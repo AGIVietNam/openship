@@ -45,7 +45,6 @@ vi.mock("@/components/terminal/ServiceTerminal", () => ({
 vi.mock("./services/AddServiceModal", () => ({ AddServiceModal: () => null }));
 vi.mock("./services/LinkedAppsCard", () => ({ LinkedAppsCard: () => null }));
 vi.mock("./services/ServiceSettingsForm", () => ({ ServiceSettingsForm: () => null }));
-vi.mock("./ResourceSettings", () => ({ ResourceSettings: () => null }));
 vi.mock("./UseInProjectModal", () => ({ UseInProjectModal: () => null }));
 vi.mock("./UsedByCard", () => ({ UsedByCard: () => null }));
 vi.mock("@/lib/api/services", async (original) => {

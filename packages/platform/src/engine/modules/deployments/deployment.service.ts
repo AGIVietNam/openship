@@ -6,6 +6,7 @@
  */
 
 import { findProjectDeployment } from "../../lib/active-deployment";
+import { withProjectRuntimeLock } from "../../lib/project-runtime-lock";
 import { existsSync, readFileSync } from "node:fs";
 import { repos, type Deployment } from "@repo/db";
 import { NotFoundError, ForbiddenError, deploymentBelongsToProject, type DeploymentHistoryQuery } from "@repo/core";
@@ -135,6 +136,11 @@ export async function getDeployment(deploymentId: string, organizationId: string
 // redeploy are blocked separately, in build.service's triggerDeployment.
 
 export async function deleteDeployment(deploymentId: string, organizationId: string) {
+  const dep = await getDeployment(deploymentId, organizationId);
+  return withProjectRuntimeLock(dep.projectId, () => deleteDeploymentLocked(deploymentId, organizationId));
+}
+
+async function deleteDeploymentLocked(deploymentId: string, organizationId: string) {
   const dep = await getDeployment(deploymentId, organizationId);
 
   const project = await repos.project.findById(dep.projectId);

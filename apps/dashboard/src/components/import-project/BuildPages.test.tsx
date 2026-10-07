@@ -110,6 +110,101 @@ function panel() { return host.querySelector<HTMLElement>('[role="tabpanel"][ari
 async function select(label: string) { await act(async () => tab(label).click()); }
 
 describe("build pages", () => {
+  it.each([true, false])(
+    "keeps a failed-backup decision usable through a network error and closes it on replacement or completion (Compose: %s)",
+    async (compose) => {
+      deployment.deploymentStatus = "building";
+      deployment.state.deploymentSuccess = false;
+      deployment.state.pendingPrompt = {
+        promptId: "backup:1",
+        title: "Pre-deploy backup failed",
+        message: "The new release has not started.",
+        actions: [
+          { id: "retry:1", label: "Retry backup", variant: "primary" },
+          { id: "skip:1", label: "Continue without backup", variant: "danger" },
+          { id: "stop:1", label: "Stop deployment", variant: "secondary" },
+        ],
+        details: { backupErrors: ["postgres: dump interrupted"] },
+      };
+      mocks.showModal.mockReturnValueOnce("backup-modal-1").mockReturnValueOnce("backup-modal-2");
+      await render(compose);
+      expect(mocks.showModal).toHaveBeenCalledOnce();
+      expect(mocks.showModal.mock.calls[0]![0]).toMatchObject({
+        closable: false,
+        showCloseButton: false,
+      });
+      const dialog = document.createElement("div");
+      document.body.append(dialog);
+      const dialogRoot = createRoot(dialog);
+      try {
+        await act(async () => dialogRoot.render(mocks.showModal.mock.calls[0]![0].customContent));
+        const buttons = [...dialog.querySelectorAll<HTMLButtonElement>("button")];
+        expect(buttons.map((button) => button.textContent)).toEqual([
+          "Retry backup",
+          "Continue without backup",
+          "Stop deployment",
+        ]);
+        expect(dialog.textContent).toContain("postgres: dump interrupted");
+        expect(dialog.textContent).not.toContain(copy.promptDetails.sites.warningsTitle);
+        expect(document.activeElement).toBe(buttons[0]);
+        await act(async () =>
+          buttons[0]!.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Tab",
+              shiftKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          ),
+        );
+        expect(document.activeElement).toBe(buttons[2]);
+        await act(async () =>
+          buttons[2]!.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+          ),
+        );
+        expect(document.activeElement).toBe(buttons[0]);
+        mocks.respond.mockRejectedValueOnce(new Error("Connection interrupted"));
+        await act(async () => buttons[0]!.click());
+        expect(dialog.querySelector('[role="alert"]')?.textContent).toContain(
+          "Connection interrupted",
+        );
+        expect(buttons.every((button) => !button.disabled)).toBe(true);
+        expect(mocks.hideModal).not.toHaveBeenCalled();
+
+        let finishResponse!: () => void;
+        mocks.respond.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              finishResponse = resolve;
+            }),
+        );
+        await act(async () => {
+          buttons[0]!.click();
+          buttons[0]!.click();
+        });
+        expect(mocks.respond).toHaveBeenCalledTimes(2); // the failed request + one retry
+        expect(buttons.every((button) => button.disabled)).toBe(true);
+        expect(mocks.hideModal).not.toHaveBeenCalled();
+        await act(async () => finishResponse());
+
+        deployment.state.pendingPrompt = {
+          ...deployment.state.pendingPrompt,
+          promptId: "backup:2",
+        };
+        await render(compose);
+        expect(mocks.hideModal).toHaveBeenCalledWith("backup-modal-1");
+        expect(mocks.showModal).toHaveBeenCalledTimes(2);
+        deployment.deploymentStatus = "failed";
+        await render(compose);
+        expect(mocks.hideModal).toHaveBeenCalledWith("backup-modal-2");
+      } finally {
+        await act(async () => dialogRoot.unmount());
+        dialog.remove();
+      }
+    },
+  );
+
   it.each([true, false])("uses one shared header and action set (Compose: %s)", async compose => {
     if (!compose) {
       deployment.config.projectType = "app";

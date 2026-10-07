@@ -1,5 +1,9 @@
 # Shared Cloud capacity and pricing rollout
 
+This records the earlier per-project workspace rollout and its historical offers.
+For current server subscriptions and resources, see [Managed Cloud servers](managed-cloud-servers.md)
+and [the pricing catalog](../packages/core/src/pricing/README.md).
+
 ## Allocation authority
 
 Oblien owns effective namespace/account limits, current reservations, atomic

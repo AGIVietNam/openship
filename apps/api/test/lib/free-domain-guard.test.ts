@@ -40,7 +40,7 @@ describe("assertFreeEndpointsAllowed — default/SaaS base (#427)", () => {
     await assertFreeEndpointsAllowed(
       "org-1",
       [{ domainType: "free", domain: "web" }] as any,
-      "managed-compose-domains",
+      { capability: "managed-compose-domains" },
     );
     expect(requireCloud).toHaveBeenCalledWith("managed-compose-domains", { organizationId: "org-1" });
   });

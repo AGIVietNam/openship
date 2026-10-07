@@ -29,6 +29,7 @@ import {
   type PricingLocale,
 } from "./index";
 import { pricingCatalogSchema, pricingCopySchema, planLimitsSchema } from "./schema";
+import { quoteCustomResources } from "./custom";
 import { RESOURCE_TIER_ORDER, RESOURCE_TIER_SPECS } from "../resources";
 
 const localesDir = fileURLToPath(new URL("./locales", import.meta.url));
@@ -52,9 +53,25 @@ function leafKeys(value: unknown, prefix = ""): string[] {
 }
 
 describe("pricing catalog (pricing.json)", () => {
+  it("rejects PAYG tiers that cannot fit their server count or shrink a higher tier's pool", () => {
+    const impossible = structuredClone(PRICING);
+    impossible.payg.tiers[0]!.pool.servers = 3;
+    expect(pricingCatalogSchema.safeParse(impossible).success).toBe(false);
+    const shrinking = structuredClone(PRICING);
+    shrinking.payg.tiers[1]!.pool.diskGb = 60;
+    expect(pricingCatalogSchema.safeParse(shrinking).success).toBe(false);
+    const duplicate = structuredClone(PRICING);
+    duplicate.payg.tiers[1]!.id = duplicate.payg.tiers[0]!.id;
+    expect(pricingCatalogSchema.safeParse(duplicate).success).toBe(false);
+    const threshold = structuredClone(PRICING);
+    threshold.payg.tiers[1]!.minimumFundingCents = 100;
+    expect(pricingCatalogSchema.safeParse(threshold).success).toBe(false);
+  });
   it("rejects unfunded plan or top-up allowances and inherited retail capacity", () => {
     const overfundedPlan = structuredClone(PRICING);
-    overfundedPlan.plans.find(plan => plan.id === "pro")!.billing.creditsPerCycle = 4001;
+    const metered = overfundedPlan.plans.find(plan => plan.id === "pro")!;
+    metered.billing.mode = "metered";
+    metered.billing.creditsPerCycle = 4001;
     expect(pricingCatalogSchema.safeParse(overfundedPlan).success).toBe(false);
     const overfundedPack = structuredClone(PRICING);
     overfundedPack.creditPacks[0]!.creditsMilli = (overfundedPack.creditPacks[0]!.priceCents + 1) * 1000;
@@ -208,23 +225,12 @@ describe("pricing catalog (pricing.json)", () => {
     }
   });
 
-  it("keeps paid allowances positive and gives an unsubscribed account zero", () => {
+  it("covers monthly capacity without granting a second credit allowance", () => {
     expect(planMonthlyCredits("free")).toBe(0);
-    for (const id of PLAN_IDS.filter(id => id !== "free")) {
-      const milli = planMonthlyCredits(id);
-      if (milli === null) continue; // enterprise: hand-granted
-      expect(milli, `${id} would be refused by toOblienCredits()`).toBeGreaterThan(0);
+    for (const id of ["hobby", "starter", "pro", "team"] as const) {
+      expect(resolvePlan(id)).toMatchObject({ billingMode: "monthly", monthlyCredits: null });
+      expect(PRICING.plans.find(plan => plan.id === id)!.billing.creditsPerCycle).toBe(0);
     }
-  });
-
-  it("uses the reseller's explicit credit allowance for each monthly cycle", () => {
-    for (const plan of PRICING.plans) {
-      const credits = plan.billing.creditsPerCycle;
-      expect(planMonthlyCredits(plan.id), plan.id).toBe(credits === null ? null : credits * 1000);
-    }
-    expect(planMonthlyCredits("starter")).toBe(1_700_000);
-    expect(planMonthlyCredits("pro")).toBe(3_500_000);
-    expect(planMonthlyCredits("team")).toBe(9_000_000);
   });
 
   it("defaults grace to zero without promising fixed runtime for metered credits", () => {
@@ -250,8 +256,8 @@ describe("pricing catalog (pricing.json)", () => {
     expect([...rates].sort((a, b) => a - b)).toEqual(rates);
   });
 
-  it("declares finite VM and total capacity for retail tiers independently of the enterprise owner", () => {
-    expect(PLAN_IDS.map(id => PLANS[id].oblienLimits.max_workspaces)).toEqual([0, 1, 3, 6, 12, null]);
+  it("grants one managed server per retail subscription independently of the enterprise owner", () => {
+    expect(PLAN_IDS.map(id => PLANS[id].oblienLimits.max_workspaces)).toEqual([0, 1, 1, 1, 1, null]);
     expect(["hobby", "starter", "pro", "team"].map(id => PLANS[id as PlanTierId].oblienLimits.max_total_vcpus)).toEqual([1, 2, 4, 8]);
     for (const id of ["hobby", "starter", "pro", "team"] as const) {
       expect(Object.values(PLANS[id].oblienLimits).every(value => Number.isInteger(value) && value! > 0)).toBe(true);
@@ -268,13 +274,20 @@ describe("pricing catalog (pricing.json)", () => {
   });
 
   it.each([
-    ["hobby", 1, 2048], ["starter", 2, 3072], ["pro", 4, 4096], ["team", 8, 8192],
-  ] as const)("allows one %s service the shared CPU pool and half the shared RAM", (id, cpuCores, memoryMb) => {
+    ["hobby", 1, 2048, 40], ["starter", 2, 8192, 128], ["pro", 4, 16384, 250], ["team", 8, 32768, 600],
+  ] as const)("allows one %s service the full workspace CPU and RAM pool", (id, cpuCores, memoryMb, diskGb) => {
     const limits = planServiceResources(planLimits(id));
     expect(limits).toEqual({ cpuCores, memoryMb });
     expect(cpuCores).toBe(PLANS[id].oblienLimits.max_total_vcpus);
     expect(cpuCores).toBe(PLANS[id].oblienLimits.max_vcpus);
-    expect(memoryMb).toBe(PLANS[id].oblienLimits.max_total_ram_mb! / 2);
+    expect(memoryMb).toBe(PLANS[id].oblienLimits.max_total_ram_mb);
+    expect(memoryMb).toBe(PLANS[id].oblienLimits.max_ram_mb);
+    expect(PLANS[id].oblienLimits.max_disk_gb).toBe(PLANS[id].oblienLimits.max_total_disk_gb);
+    expect(PLANS[id].oblienLimits.max_total_disk_gb).toBe(diskGb);
+    expect(quoteCustomResources({ cpuCores, memoryMb, diskGb })).toMatchObject({
+      resources: { cpuCores, memoryMb, diskGb },
+      priceCents: PRICING.plans.find(plan => plan.id === id)!.price.monthly,
+    });
     expect(resolvePlan(id).features).toContain(`Up to ${cpuCores} vCPU and ${memoryMb / 1024} GB RAM per app`);
   });
 
@@ -299,7 +312,7 @@ describe("pricing catalog (pricing.json)", () => {
     expect(planLimitsSchema.safeParse({ ...planLimits("starter"), maxServiceResources }).success).toBe(false);
   });
 
-  it.each([null, undefined, { cpuCores: 3, memoryMb: 3072 }, { cpuCores: 1, memoryMb: 7168 }])(
+  it.each([null, undefined, { cpuCores: 3, memoryMb: 3072 }, { cpuCores: 1, memoryMb: 9216 }])(
     "rejects new retail ceilings that are missing or exceed provider capacity: %j", maxServiceResources => {
       const catalog = structuredClone(PRICING);
       catalog.plans.find(plan => plan.id === "starter")!.limits.maxServiceResources = maxServiceResources;
@@ -307,10 +320,10 @@ describe("pricing catalog (pricing.json)", () => {
     },
   );
 
-  it("keeps metered build usage visible without inventing a fixed-minute allowance", () => {
+  it("includes builds on the server without inventing a fixed-minute allowance", () => {
     for (const id of ["hobby", "starter", "pro", "team"] as const) {
       expect(planLimits(id).buildMinutesPerMonth).toBeNull();
-      expect(resolvePlan(id).features).toContain("Builds use shared credits, with no monthly time cap");
+      expect(resolvePlan(id).features).toContain("Builds share your server, with no monthly time cap");
     }
   });
 
@@ -354,34 +367,36 @@ describe("pricing catalog — schema rejects bad edits", () => {
     ).toBe(true);
   });
 
-  it("rejects paid offers without credits and invalid grace thresholds", () => {
-    expect(
-      mutate((c) => {
-        c.plans[1].billing.creditsPerCycle = null;
-      }),
-    ).toBe(false);
-    expect(
-      mutate((c) => {
-        c.plans[1].billing.creditsPerCycle = 0;
-      }),
-    ).toBe(false);
-    expect(
-      mutate((c) => {
-        c.plans[1].billing.overdraft = 60;
-      }),
-    ).toBe(false);
-    expect(
-      mutate((c) => {
-        c.plans[1].billing.overdraft = 60;
-        c.plans[1].billing.suspendThreshold = 60;
-      }),
-    ).toBe(true);
-    expect(
-      mutate((c) => {
-        c.annual.enabled = true;
-        c.plans[1].price.annual = 10000;
-      }),
-    ).toBe(false);
+  it("rejects a second credit allowance, grace or yearly billing on monthly capacity", () => {
+    for (const credits of [null, 400]) {
+      expect(mutate(c => { c.plans[1].billing.creditsPerCycle = credits; })).toBe(false);
+    }
+    expect(mutate(c => { c.plans[1].billing.creditsPerCycle = 0; })).toBe(true);
+    expect(mutate(c => {
+      c.plans[1].billing.overdraft = 60;
+      c.plans[1].billing.suspendThreshold = 60;
+    })).toBe(false);
+    expect(mutate(c => {
+      c.annual.enabled = true;
+      c.plans[1].price.annual = 5000;
+      c.plans[1].billing.yearlyCreditsPerCycle = 4000;
+    })).toBe(false);
+  });
+
+  it("retains validation of saved metered offers with a positive allowance and valid grace", () => {
+    const metered = (c: any) => {
+      c.plans[1].billing.mode = "metered";
+      c.plans[1].billing.creditsPerCycle = 400;
+    };
+    for (const credits of [null, 0]) {
+      expect(mutate(c => { metered(c); c.plans[1].billing.creditsPerCycle = credits; })).toBe(false);
+    }
+    expect(mutate(c => { metered(c); c.plans[1].billing.overdraft = 60; })).toBe(false);
+    expect(mutate(c => {
+      metered(c);
+      c.plans[1].billing.overdraft = 60;
+      c.plans[1].billing.suspendThreshold = 60;
+    })).toBe(true);
   });
 
   it("rejects a tier that is neither priced nor contact-sales", () => {
@@ -626,10 +641,11 @@ describe("pricing resolution", () => {
     expect(free.features.join(" ")).not.toMatch(/\{[a-z]/i);
   });
 
-  it("formats large counts for the locale", () => {
-    expect(resolvePlan("team", "en").features).toContain("9,000 usage credits per month");
+  it("formats capacity and metered pack counts for the locale", () => {
+    expect(resolvePlan("team", "en").features).toContain("CPU, RAM and storage covered for the paid month");
     // Arabic is pinned to Latin numerals so a price stays legible.
-    expect(resolvePlan("team", "ar").features.join(" ")).toMatch(/9,000/);
+    expect(resolvePlan("team", "ar").features.join(" ")).toMatch(/600/);
+    expect(resolveCreditPacks("ar").find(pack => pack.id === "pack_1700")!.name).toMatch(/1,700/);
   });
 
   it("differentiates tiers on usage and size, not on capability", () => {
@@ -641,7 +657,8 @@ describe("pricing resolution", () => {
       expect(words, `${id} must not convert credits into fixed runtime`).not.toMatch(
         /compute minutes/,
       );
-      expect(words, `${id} must quote usage credits`).toMatch(/usage credits/);
+      expect(words, `${id} must explain paid coverage`).toMatch(/covered for the paid month/);
+      expect(words).not.toMatch(/usage credits|top-ups/);
       expect(words).not.toMatch(/build minutes/);
       expect(words, `${id} must quote a machine size`).toMatch(/vCPU/);
       // Nothing that reads as a paywall on something every tier already has.

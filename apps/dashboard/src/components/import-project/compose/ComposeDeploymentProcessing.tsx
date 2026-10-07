@@ -13,10 +13,9 @@ import { PageContainer } from "@/components/ui/PageContainer";
 import { Tabs } from "@/components/ui/Tabs";
 import { ServiceStatusIndicator } from "@/components/services/ServiceStatusBadge";
 import { PortAdvisoryModal } from "../PortAdvisoryModal";
-import { PromptDetails } from "../PromptDetails";
+import { useDeploymentPrompt } from "../useDeploymentPrompt";
 import { useRouter } from "next/navigation";
 import { useDeployment } from "@/context/DeploymentContext";
-import { useModal } from "@/context/ModalContext";
 import { useCloudDeployPricing } from "@/hooks/useCloudDeployPricing";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/context/ToastContext";
@@ -45,14 +44,16 @@ interface Props {
 const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   const { config, state, onTerminalReady, respondToPrompt, deploymentStatus } =
     useDeployment();
-  const { showModal, hideModal } = useModal();
-  const showCloudPricing = useCloudDeployPricing();
+  const showCloudPricing = useCloudDeployPricing(config.workspaceId);
   const { showToast } = useToast();
   const { resolvedTheme } = useTheme();
   const { t } = useI18n();
   const cd = t.importProject.composeDeployment;
   const router = useRouter();
-  const promptModalRef = React.useRef<string | null>(null);
+  useDeploymentPrompt(
+    ["ready", "failed", "cancelled"].includes(deploymentStatus) ? null : state.pendingPrompt,
+    respondToPrompt,
+  );
   // Tracks which deployment's decision dialog we've already auto-opened, so it
   // pops once (not on every re-render) while staying re-openable via the banner.
   const autoOpenedDecisionRef = React.useRef<string | null>(null);
@@ -171,56 +172,6 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
       setActiveLogTab(target);
     }
   }, [userPinnedTab, services, logServiceNames, activeLogTab]);
-
-  // ── Pipeline prompt modal ──────────────────────────────────────────────
-  useEffect(() => {
-    if (!state.pendingPrompt) return;
-    const { promptId, title, message, actions, details } = state.pendingPrompt;
-    if (promptModalRef.current === promptId) return;
-    promptModalRef.current = promptId;
-
-    const modalId = showModal({
-      title,
-      icon: "warning",
-      customContent: (
-        <div className="p-6 space-y-5">
-          <div className="space-y-2">
-            <h3 className="text-xl font-bold text-foreground">{title}</h3>
-            <p className="text-sm leading-relaxed text-muted-foreground">{message}</p>
-          </div>
-
-          <PromptDetails details={details} />
-
-          <div className="flex items-center justify-end gap-3 pt-2">
-            {actions.map((action) => {
-              const variant = (action.variant || "secondary") as "secondary" | "danger" | "primary";
-              const styles =
-                variant === "danger"
-                  ? "bg-danger-solid text-white hover:bg-danger-solid/90"
-                  : variant === "primary"
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "bg-secondary text-secondary-foreground hover:bg-secondary/80";
-              return (
-                <button
-                  key={action.id}
-                  type="button"
-                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles}`}
-                  onClick={() => {
-                    hideModal(modalId);
-                    respondToPrompt(action.id);
-                  }}
-                >
-                  {action.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ),
-      width: "560px",
-      maxWidth: "92vw",
-    });
-  }, [state.pendingPrompt, showModal, hideModal, respondToPrompt]);
 
   const handleKeepDeployment = React.useCallback(async () => {
     if (state.deploymentId) {

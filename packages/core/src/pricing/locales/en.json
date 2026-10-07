@@ -22,7 +22,7 @@
     },
     "hobby": {
       "name": "Hobby",
-      "tagline": "Light development and occasional apps, with a finite usage allowance."
+      "tagline": "A small managed server for personal projects and everyday apps."
     }
   },
   "features": {
@@ -31,7 +31,7 @@
     "anyWorkload": "Run anything — containers, Compose, workers, Postgres, Redis",
     "runningServices": "{runningServices} running apps, databases or workers",
     "buildMinutes": "{buildMinutes} build minutes per month",
-    "meteredBuilds": "Builds use shared credits, with no monthly time cap",
+    "sharedBuilds": "Builds share your server, with no monthly time cap",
     "power": "Up to {powerCpu} vCPU and {powerRamGb} GB RAM per app",
     "projects": "{maxProjects} projects",
     "projectsUnlimited": "Unlimited projects",
@@ -55,10 +55,8 @@
     "selfHostedServices": "Every managed service — Postgres, Redis, mail",
     "selfHostedClients": "CLI, web, and desktop — one backend",
     "selfHostedFreeSubdomains": "{freeSubdomains} free {freeDomainSuffix} subdomains when you connect to Cloud",
-    "usageCredits": "{credits} usage credits per month",
-    "namespaceCapacity": "Total: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB disk",
-    "finiteUsage": "Continuous hosting may need credit top-ups.",
-    "oneRunningService": "1 running app, database or worker"
+    "monthlyCoverage": "CPU, RAM and storage covered for the paid month",
+    "namespaceCapacity": "Total: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB disk"
   },
   "selfHosted": {
     "name": "Self-hosted",

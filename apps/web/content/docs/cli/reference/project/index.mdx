@@ -31,6 +31,15 @@ openship project|projects [options] [command]
 | [`transfer <id> <direction>`](/docs/cli/reference/project#openship-project-transfer) | Promote a project to Openship Cloud, or bring it back (self-hosted only) |
 | [`logs [options] <id>`](/docs/cli/reference/project#openship-project-logs) | Show or stream runtime (container) logs |
 | [`server-logs [options] <id>`](/docs/cli/reference/project#openship-project-server-logs) | Show or stream HTTP request logs (edge/OpenResty) |
+| [`update <id> <file>`](/docs/cli/reference/project#openship-project-update) | Patch a project's build and runtime configuration |
+| [`environment\|environments`](/docs/cli/reference/project#openship-project-environment) | Manage isolated project environments (each has its own project ID) |
+| [`resources`](/docs/cli/reference/project#openship-project-resources) | Inspect and configure project CPU, memory, disk and build limits |
+| [`storage`](/docs/cli/reference/project#openship-project-storage) | Inspect storage and bind an app's object storage connection |
+| [`connections`](/docs/cli/reference/project/connections#openship-project-connections) | Wire app outputs into a project's environment through the engine |
+| [`pending <id>`](/docs/cli/reference/project#openship-project-pending) | Show pending deployment, routing and certificate actions |
+| [`incidents <id>`](/docs/cli/reference/project#openship-project-incidents) | Show this project's monitoring incidents |
+| [`drift <id>`](/docs/cli/reference/project#openship-project-drift) | Compare source and deployment configuration |
+| [`rollback-capacity <id>`](/docs/cli/reference/project#openship-project-rollback-capacity) | Inspect retained rollback capacity |
 
 ## openship project connect
 
@@ -101,6 +110,18 @@ openship project disable [options] <id>
 | --- | --- |
 | `id` | Project ID |
 
+## openship project drift
+
+Compare source and deployment configuration
+
+```text
+openship project drift [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
 ## openship project enable
 
 Start a stopped project
@@ -161,12 +182,69 @@ openship project env set [options] <id>
 | `--unset <key>` | KEY to delete (repeatable) (default: []) |
 | `--secret` | Mark every --set value as a secret |
 
+## openship project environment
+
+Manage isolated project environments (each has its own project ID)
+
+```text
+openship project environment|environments [options] [command]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| [`list\|ls <id>`](/docs/cli/reference/project#openship-project-environment-list) | List this project's environments and their project IDs |
+| [`create [options] <id> <name>`](/docs/cli/reference/project#openship-project-environment-create) | Create an isolated environment; deploy and link the returned project ID |
+
+## openship project environment create
+
+Create an isolated environment; deploy and link the returned project ID
+
+```text
+openship project environment create [options] <id> <name>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Source project ID |
+| `name` | Environment name |
+
+| Option | Meaning |
+| --- | --- |
+| `--slug <slug>` | Environment slug |
+| `--type <type>` | production \| preview \| development (default: "preview") |
+| `--branch <branch>` | Git branch for the environment |
+| `--source-mode <mode>` | How this environment tracks source (choices: "branch", "manual") |
+
+## openship project environment list
+
+List this project's environments and their project IDs
+
+```text
+openship project environment list|ls [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
 ## openship project get
 
 Show a single project
 
 ```text
 openship project get [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
+## openship project incidents
+
+Show this project's monitoring incidents
+
+```text
+openship project incidents [options] <id>
 ```
 
 | Argument | Meaning |
@@ -197,6 +275,18 @@ openship project logs [options] <id>
 | --- | --- |
 | `--tail <n>` | Number of recent lines |
 | `-f, --follow` | Stream logs until interrupted |
+
+## openship project pending
+
+Show pending deployment, routing and certificate actions
+
+```text
+openship project pending [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
 
 ## openship project release-image
 
@@ -230,6 +320,56 @@ openship project rename [options] <id> <name>
 | `id` | Project ID |
 | `name` | New display name |
 
+## openship project resources
+
+Inspect and configure project CPU, memory, disk and build limits
+
+```text
+openship project resources [options] [command]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| [`get <id>`](/docs/cli/reference/project#openship-project-resources-get) | Show limits and available capacity from the engine |
+| [`set <id> <file>`](/docs/cli/reference/project#openship-project-resources-set) | Change resource limits; the engine enforces destination capacity and Cloud policy |
+
+## openship project resources get
+
+Show limits and available capacity from the engine
+
+```text
+openship project resources get [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
+## openship project resources set
+
+Change resource limits; the engine enforces destination capacity and Cloud policy
+
+```text
+openship project resources set [options] <id> <file>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+| `file` | JSON patch with production/build resource selections, sleepMode or port |
+
+## openship project rollback-capacity
+
+Inspect retained rollback capacity
+
+```text
+openship project rollback-capacity [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
 ## openship project server-logs
 
 Show or stream HTTP request logs (edge/OpenResty)
@@ -261,6 +401,61 @@ openship project sleep-mode [options] <id> <mode>
 | `id` | Project ID |
 | `mode` | One of: auto_sleep, always_on |
 
+## openship project storage
+
+Inspect storage and bind an app's object storage connection
+
+```text
+openship project storage [options] [command]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| [`get <id>`](/docs/cli/reference/project#openship-project-storage-get) | Show the storage binding, volumes and available providers |
+| [`bind <id> <file>`](/docs/cli/reference/project#openship-project-storage-bind) | Save an object storage binding; redeploy to apply its variables |
+| [`unbind [options] <id>`](/docs/cli/reference/project#openship-project-storage-unbind) | Remove the object's storage binding from this project |
+
+## openship project storage bind
+
+Save an object storage binding; redeploy to apply its variables
+
+```text
+openship project storage bind [options] <id> <file>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+| `file` | JSON storage binding: bucket and sourceProjectId, or external provider credentials |
+
+## openship project storage get
+
+Show the storage binding, volumes and available providers
+
+```text
+openship project storage get [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
+## openship project storage unbind
+
+Remove the object's storage binding from this project
+
+```text
+openship project storage unbind [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+
+| Option | Meaning |
+| --- | --- |
+| `-y, --yes` | Skip confirmation |
+
 ## openship project transfer
 
 Promote a project to Openship Cloud, or bring it back (self-hosted only)
@@ -273,3 +468,16 @@ openship project transfer [options] <id> <direction>
 | --- | --- |
 | `id` | Project ID |
 | `direction` | One of: to-cloud, to-self-hosted |
+
+## openship project update
+
+Patch a project's build and runtime configuration
+
+```text
+openship project update [options] <id> <file>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Project ID |
+| `file` | JSON patch using the shared project update contract |

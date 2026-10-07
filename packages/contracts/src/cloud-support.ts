@@ -50,3 +50,100 @@ export const CloudSupportReceiptSchema = Type.Object(
   { additionalProperties: false },
 );
 export type CloudSupportReceipt = Static<typeof CloudSupportReceiptSchema>;
+
+/** A connection binding, never a credential. Local relays require it on ticket requests. */
+export const CLOUD_SUPPORT_ACCOUNT_HEADER = "X-Openship-Support-Account";
+export const CloudSupportSessionSchema = Type.Object(
+  {
+    account: Type.Union([
+      Type.Object(
+        {
+          key: Type.String({ minLength: 1, maxLength: 512 }),
+          id: Type.String(),
+          name: Type.Union([Type.String(), Type.Null()]),
+          email: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: false },
+);
+export type CloudSupportSession = Static<typeof CloudSupportSessionSchema>;
+
+export const CloudSupportCategorySchema = Type.Union([
+  Type.Literal("deployment"),
+  Type.Literal("billing"),
+  Type.Literal("account"),
+  Type.Literal("general"),
+]);
+
+/** Customer identity comes from the session, never from the form or an email match. */
+export const CloudSupportCustomerInputSchema = Type.Object(
+  { requestId, subject: singleLine(200), message, category: CloudSupportCategorySchema },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerReplySchema = Type.Object(
+  { requestId, message },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerStatusSchema = Type.Object(
+  { status: CloudSupportStatusSchema },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerQuerySchema = Type.Object(
+  {
+    status: Type.Optional(CloudSupportStatusSchema),
+    search: Type.Optional(Type.String({ maxLength: 200 })),
+    before: Type.Optional(CloudSupportIdSchema),
+    limit: Type.Integer({ minimum: 1, maximum: 50 }),
+  },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerTicketSchema = Type.Object(
+  {
+    id: CloudSupportIdSchema,
+    subject: Type.String(),
+    category: CloudSupportCategorySchema,
+    status: CloudSupportStatusSchema,
+    createdAt: Type.String(),
+    updatedAt: Type.String(),
+  },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerListSchema = Type.Object(
+  {
+    tickets: Type.Array(CloudSupportCustomerTicketSchema),
+    nextCursor: Type.Union([CloudSupportIdSchema, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+export const CloudSupportCustomerDetailSchema = Type.Object(
+  {
+    ticket: Type.Composite([
+      CloudSupportCustomerTicketSchema,
+      Type.Object({ message: Type.String() }),
+    ]),
+    messages: Type.Array(
+      Type.Object(
+        {
+          id: Type.String(),
+          author: Type.Union([Type.Literal("customer"), Type.Literal("support")]),
+          body: Type.String(),
+          createdAt: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export type CloudSupportCategory = Static<typeof CloudSupportCategorySchema>;
+export type CloudSupportCustomerInput = Static<typeof CloudSupportCustomerInputSchema>;
+export type CloudSupportCustomerReply = Static<typeof CloudSupportCustomerReplySchema>;
+export type CloudSupportCustomerQuery = Static<typeof CloudSupportCustomerQuerySchema>;
+export type CloudSupportCustomerTicket = Static<typeof CloudSupportCustomerTicketSchema>;
+export type CloudSupportCustomerList = Static<typeof CloudSupportCustomerListSchema>;
+export type CloudSupportCustomerDetail = Static<typeof CloudSupportCustomerDetailSchema>;

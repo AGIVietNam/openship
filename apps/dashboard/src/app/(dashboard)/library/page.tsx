@@ -57,7 +57,7 @@ export default function LibraryPage() {
   const libRepos = useLibraryRepos(selectedOwner, connected);
   const { selfHosted, deployMode } = usePlatform();
   // Only the desktop app can read the user's folder off disk (native picker +
-  // co-located API). A remote self-hosted browser can't — it uploads like SaaS.
+  // co-located API). A remote self-hosted browser uploads it instead.
   const isDesktop = deployMode === "desktop";
   const { connected: cloudConnected } = useCloud();
 
@@ -116,22 +116,14 @@ export default function LibraryPage() {
     (state.sources.ghCli.method ?? "host-cli") === "host-cli" &&
     !ghCliConsent;
 
-  // Cloud's Templates entry starts with a framework, then uploads the source.
-  // Desktop can read a folder directly; remote self-hosted browsers upload it.
+  // Folder import is available on self-hosted instances. Cloud offers a Git URL tab.
   const tabs: TabItem[] = [
     { key: "apps", label: t.dashboard.pages.apps.title, icon: "grid" },
     { key: "repositories", label: t.library.page.tabs.github, icon: "github" },
-    ...(!selfHosted
-      ? [{ key: "url" as const, label: t.library.page.tabs.gitUrl, icon: "link" as const }]
-      : []),
-    {
-      key: "folder",
-      label: selfHosted ? t.library.page.tabs.folder : t.library.page.tabs.templates,
-      icon: selfHosted ? "folder-out" : "layers",
-    },
-    // Adopting a running Docker deployment needs SSH into the user's own box —
-    // self-hosted / desktop only (cloud mode has no server inventory).
-    ...(selfHosted ? [{ key: "server" as const, label: t.migration.entry.tab, icon: "migration" as const }] : []),
+    ...(selfHosted
+      ? [{ key: "folder" as const, label: t.library.page.tabs.folder, icon: "folder-out" as const }]
+      : [{ key: "url" as const, label: t.library.page.tabs.gitUrl, icon: "link" as const }]),
+    { key: "server", label: t.migration.entry.tab, icon: "migration" },
   ];
 
   return (
@@ -185,10 +177,8 @@ export default function LibraryPage() {
         <div className="space-y-6 min-w-0">
           {activeTab === "apps" ? (
             <AppCatalog embedded />
-          ) : activeTab === "folder" ? (
-            // Desktop reads the folder off disk (native picker, no upload/
-            // stack). SaaS AND remote self-hosted browsers upload it instead
-            // (they can't see the user's filesystem).
+          ) : selfHosted && activeTab === "folder" ? (
+            // Desktop reads the folder off disk; remote self-hosted browsers upload it.
             isDesktop ? (
               <LocalProjects />
             ) : (
@@ -256,7 +246,7 @@ export default function LibraryPage() {
         />
       </div>
 
-      {selfHosted && showMigrate && (
+      {showMigrate && (
         <div className={activeTab === "server" ? undefined : "hidden"}>
           <ServerMigrationWizard
             variant="tab"

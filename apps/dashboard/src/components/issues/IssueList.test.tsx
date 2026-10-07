@@ -22,7 +22,7 @@ import { IssueList } from "./IssueList";
 const render = (issues = ISSUE_FIXTURES.mixed!) =>
   renderToStaticMarkup(
     <I18nProvider>
-      <IssueList issues={issues} busyId={null} onResolve={() => {}} onInfraFix={() => {}} />
+      <IssueList issues={issues} busyIds={new Set()} onResolve={() => {}} onInfraFix={() => {}} />
     </I18nProvider>,
   );
 
@@ -191,7 +191,7 @@ describe("each row offers the fix the server attached, and only that", () => {
       <I18nProvider>
         <IssueList
           issues={ISSUE_FIXTURES.mixed!}
-          busyId={busy.id}
+          busyIds={new Set([busy.id])}
           onResolve={() => {}}
           onInfraFix={() => {}}
         />

@@ -55,6 +55,7 @@
     "appsEmptyDesc": "Um clique, totalmente auto-hospedado — bancos de dados, automação, analytics, cofres de senhas e mais, rodando nos seus servidores."
   },
   "nav": {
+    "support": "Suporte",
     "scale": "Escalabilidade",
     "home": "Início",
     "new-project": "Novo Projeto",
@@ -74,6 +75,7 @@
     "addMailbox": "Adicionar caixa de correio",
     "webmail": "Webmail",
     "sections": {
+      "help": "Ajuda",
       "main": "Principal",
       "settings": "Configurações",
       "infrastructure": "Infraestrutura",
@@ -83,7 +85,8 @@
       "account": "Conta"
     },
     "apps": "Apps",
-    "jobs": "Tarefas"
+    "jobs": "Tarefas",
+    "workspaces": "Espaços de trabalho"
   },
   "sidebar": {
     "expand": "Expandir barra lateral",

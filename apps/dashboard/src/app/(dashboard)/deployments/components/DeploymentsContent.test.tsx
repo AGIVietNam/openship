@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { baseDictionary } from "@/i18n";
 import { DeploymentsContent } from "./DeploymentsContent";
+import { CloudResourceContext } from "@/context/CloudResourceContext";
 
 const h = vi.hoisted(() => ({ project: vi.fn(), all: vi.fn() }));
 const navigationListeners = new Set<() => void>();
@@ -162,6 +163,27 @@ it("also pages global deployment history", async () => {
   await click("Next page");
   expect(h.all.mock.lastCall?.[0]).toMatchObject({ page: 2, perPage: 20 });
   expect(h.project).not.toHaveBeenCalled();
+});
+
+it("refreshes history on a Cloud account change and discards the previous response", async () => {
+  let finish!: (value: ReturnType<typeof pageResponse>) => void;
+  h.all.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }))
+    .mockResolvedValueOnce(pageResponse(1, 1, "second-account"));
+  const showAccount = (account: string) => act(async () => root.render(
+    <CloudResourceContext.Provider value={account}>
+      <DeploymentsContent hideHeader hideSidebar />
+    </CloudResourceContext.Provider>,
+  ));
+
+  await showAccount("first-account");
+  const signal = h.all.mock.calls[0]![1] as AbortSignal;
+  await showAccount("second-account");
+  await act(async () => finish(pageResponse(1, 1, "first-account")));
+
+  expect(signal.aborted).toBe(true);
+  expect(h.all).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("second-account");
+  expect(container.textContent).not.toContain("first-account");
 });
 
 it("can select a project whose history is older than the first page", async () => {

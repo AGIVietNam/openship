@@ -30,7 +30,7 @@ const card =
       <I18nProvider>
         <Card
           issues={issues}
-          busyId={null}
+          busyIds={new Set()}
           onResolve={() => {}}
           onInfraFix={() => {}}
           onHide={onHide}

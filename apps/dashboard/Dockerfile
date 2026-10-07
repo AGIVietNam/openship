@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # ─── Build stage ────────────────────────────────────────
-# Pinned to .bun-version (1.3.3) — reproducible official images.
-FROM oven/bun:1.3.3 AS builder
+# Pinned to .bun-version — reproducible official images.
+FROM oven/bun:1.3.14 AS builder
 WORKDIR /app
 
 COPY package.json bun.lock pnpm-workspace.yaml ./

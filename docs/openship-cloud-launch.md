@@ -1,17 +1,70 @@
 # Openship Cloud release gate
 
-Current retail capacity and funded allowances are documented in [the September 29 model](cloud-capacity-economics.md). That v3 contract supersedes the inherited VM caps and old top-up prices in the historical reports below. Require `reseller.aggregateResourceLimits: true` in the deployed API before new checkout.
+## Current contract — monthly servers, 2026-10-04
 
-Paid Cloud subscriptions use Oblien Mode B. Oblien owns hosted checkout, payment collection,
-subscription renewals, credit grants, usage enforcement, and workspace lifecycle.
-Openship owns its prices, product copy, namespace allowances and application limits,
-customer identity, project/build orchestration, and the dashboard. It calls the provider APIs for infrastructure;
-it does not operate a hypervisor or maintain an independent payment ledger.
+New v9 offers keep $5 / $20 / $39 / $99 retail prices and cover one managed
+server's CPU, RAM and disk for the full paid month. They grant zero compute
+credits and have no additional usage-credit gate. Custom uses the same monthly
+contract. Saved metered subscriptions and grants keep their purchased terms;
+adoption of monthly capacity is an explicit plan change at renewal.
 
-Operators can also issue [complimentary Cloud plans](complimentary-cloud-plans.md).
-These have a separate, audited grant and a zero customer price. Their finite
-monthly allowances use Oblien Mode A; ordinary paid subscriptions keep the
-provider-managed checkout and renewal flow.
+The [catalog contract](../packages/core/src/pricing/README.md) and
+[provider handoff](cloud-capacity-economics.md) supersede the credit-budget
+descriptions in the historical reports below. Oblien's published tariff still
+exceeds Hobby, Starter and Pro retail prices. The product decision is to keep
+retail unchanged and have Oblien configure the agreed tariff or explicit subsidy.
+Do not claim those payments are verified until that configuration settles them.
+
+Openship uses SDK 2.8.0 with the existing checkout, portal, plan-change and signed
+webhook flow. Monthly offers carry `billingMode: "monthly"`, an explicit pool,
+zero credits and no credit policy. Oblien owns metering, proration, paid coverage
+and resource admission. The namespace's embedded capacity is checked against its
+saved subscription. Only the provider's `blocking` flag decides billing admission;
+an empty legacy quota or owner wallet is not evidence of expired paid compute.
+
+The checkout UI requires completed provider fulfillment plus matching monthly
+coverage, or delivered credits for a metered purchase. A redirect never confirms
+payment. Refunds, disputes, replayed events and pending fulfillment keep their
+explicit handling. Upgrades require confirmed payment; resource reductions and
+billing-mode changes wait for renewal even when the price increases. The same
+durable resize worker applies approved resources and preserves restart consent.
+
+Monthly billing shows purchased capacity, coverage dates, measured CPU time and
+separate optional proxy/retained-storage details. It has no compute-credit donut
+or top-up tab. PAYG includes a pricing preview with credit packages, shared-balance
+resource estimates at published usage rates. Customer checkout stays
+unavailable until there is customer-specific funding rather than owner-wallet
+spending. New monthly servers cannot be funded by a complimentary-credit grant.
+
+Before rollout, verify the provider tariff and a real signup → checkout → signed
+payment delivery → namespace coverage → server provisioning/deployment cycle.
+Also verify paid renewal, zero legacy balance, proxy exhaustion without compute
+suspension, expiry/retention recovery, upgrades, deferred changes, refunds and
+two-customer isolation. Local provider simulations and checkout URLs do not prove
+live settlement. `cloud:check` checks deployed monthly capabilities and accepts a
+validated capacity contract without requiring credit purchases to be enabled.
+
+### Local verification for this update
+
+The billing suites pass 372 API/integration cases and 257 dashboard cases,
+including monthly zero-credit fulfillment, deferred resource reductions,
+retry/idempotency, signed-event deduplication, namespace isolation and linked
+self-hosted billing. The API route boot regression passes for both modes.
+API, platform, dashboard and website type checks pass. Generated API/MCP
+references and the documentation checks pass. The i18n regression ratchet passes;
+the standalone all-locales checker still reports the existing translation backlog.
+
+Browser previews exercised the real billing components with simulated data in
+light, dim and dark themes, narrow/wide layouts and mobile RTL. The running local
+SaaS API returns HTTP 200 with monthly $5 / $20 / $39 / $99 offers and null credit
+allowances. No real customer payment was performed. These checks do not prove
+production tariff acceptance or the public payment/webhook-to-server cycle.
+
+## Historical implementation and verification
+
+The following records retain their original dates and tested contracts. Credit
+budgets, full-price replacements, old SDK versions and old test counts describe
+those releases, not the monthly-server contract above.
 
 The Docker deployment path passed 31 live staging checks on 2026-09-17, including
 rollback, volume restore, cold restart, HTTPS and resource cleanup. After Oblien's
@@ -57,8 +110,9 @@ Deploy the matching Oblien API first: `/billing/catalog` must report
 Dashboard docs alone cannot enable this contract. Then deploy the updated
 Openship API and dashboard together. Checkout and the readiness check reject an
 older provider; startup also logs the missing capability. Existing subscription
-management remains available during that update. The npm SDK remains pinned to the
-published 2.5.0 transport, so Openship does not depend on a pending SDK release.
+management remains available during that update. Openship pins the published
+2.7.0 SDK for the official subscription-change methods and upstream stream
+cancellation fixes; the earlier local SDK patch is no longer required.
 
 The user reports a successful test-mode payment with the earlier integration.
 That is not a live acceptance result for this new offer contract. Keep the
@@ -80,7 +134,7 @@ browser return URL.
 
 ## What is connected
 
-- `oblien@2.5.0` supplies the official billing module. Openship validates the
+- `oblien@2.7.0` supplies the official billing module. Openship validates the
   returned namespace, subscription shape, hosted URL, and agreement between the
   namespace subscription and its entitlement. Its JSON transport rejects
   credential redirects, bounds request time, checks both HTTP and body failures,
@@ -98,10 +152,16 @@ browser return URL.
   Customers can also cancel or resume renewal from Overview. Both actions are
   repeatable; cancellation preserves the paid period. They remain available
   when new purchases are disabled. Portal/cancel/resume require `billing:admin`.
-- Paid plan/interval changes use a replacement checkout. Oblien starts a new
-  full-price cycle after payment without automatic proration. The dashboard
-  discloses these terms, displays scheduled cancellation, and supports yearly
-  plans and resubscribing after an ended subscription.
+- Existing paid subscriptions cannot use replacement checkout: it would charge
+  a full-price cycle without proration. New subscriptions and resubscribing after
+  an ended contract remain available. Prorated upgrades and next-cycle downgrades
+  use the published [subscription-change API](oblien-subscription-changes.md),
+  durable retry keys and the existing managed-server resize worker. Provider
+  status `applied` and fresh matching subscription terms authorize capacity;
+  acceptance or pending payment never does. The dashboard shows current terms,
+  price/restart review and pending changes, with visible server selection in
+  the right-hand billing card. Real payment authentication and renewal remain
+  deployment acceptance checks; transport-simulated tests do not replace them.
 - Signed Oblien events trigger a fresh entitlement read. The browser return URL
   never grants access. Failed synchronization returns 503 for retry; repeated
   deliveries are deduplicated. A five-minute reconciliation job repairs missed
@@ -262,7 +322,12 @@ nine dashboard locales. Both API and dashboard must be rebuilt and deployed for
 these changes. See [production-path verification](openship-cloud-production-verification.md)
 for test coverage and the remaining live payment/webhook verification.
 
-## Compose on Docker workspaces, 2026-09-17
+## Historical validation: Compose workspaces, 2026-09-17
+
+This section records the model and staging results from that date. It does not
+describe or certify the current subscription-owned server implementation; see
+[Managed Cloud servers](managed-cloud-servers.md) for its architecture and
+verification boundaries.
 
 Oblien's live image catalog now includes `oblien/docker:29` (`id: docker`,
 label: Docker + Compose). The entry advertises Docker Engine 29 running at boot,
@@ -629,11 +694,11 @@ From `apps/api`, run the read-only checker against the intended environment:
 node --env-file=.env.saas --import tsx scripts/cloud-readiness.ts
 ```
 
-It also verifies that the namespace's subscription and entitlement agree, and
-that a consumer namespace has finite credit. It exits nonzero for failed checks,
-including disabled purchase flags. Those
-flags should remain disabled in production until the remaining release gates
-are satisfied. Enable them in staging when deliberately testing checkout.
+It verifies that the namespace's subscription and entitlement agree and that it
+has either a validated capacity contract or an appropriate metered allowance.
+It also checks monthly Stripe support. Credit top-ups are optional for the saved
+metered plans and are not a monthly-server readiness requirement. This read-only
+check does not prove actual payment settlement or provider-price acceptance.
 
 ## Existing installations
 

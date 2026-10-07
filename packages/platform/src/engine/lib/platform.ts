@@ -1,5 +1,6 @@
 /** Application composition shared by the HTTP process and each owned native worker. */
 import { AppError, CLOUD_UNREACHABLE_CODE } from "@repo/core";
+import { assertCloudProxyScope } from "./cloud/scope";
 import { isCreateDeploymentResult, isDeployment } from "@repo/contracts";
 import { createPlatform, type PlatformKernel } from "@repo/platform";
 import { authorization } from "./authorization";
@@ -126,16 +127,7 @@ export function getPlatformKernel(): PlatformKernel {
       );
       if (source !== "cloud") return null;
       // Current links bind an OWNER ACCOUNT, not a local org to a cloud org.
-      // Sending that owner's unbound session would lose a fixed tenant scope.
-      // Use a scoped client directly on the canonical cloud instance until
-      // cloud links have a verified organization mapping.
-      if (ctx.scopeMode === "fixed") {
-        throw new AppError(
-          "This cloud link has no tenant mapping. Connect the SDK directly to the cloud instance with its organizationId.",
-          409,
-          "CLOUD_SCOPE_UNAVAILABLE",
-        );
-      }
+      assertCloudProxyScope(ctx);
       const response = await cloudFetchAsOrgOwner(ctx.organizationId, "/api/deployments", {
         method: "POST",
         body: JSON.stringify({ ...input, ...(options.trigger && { trigger: options.trigger }) }),

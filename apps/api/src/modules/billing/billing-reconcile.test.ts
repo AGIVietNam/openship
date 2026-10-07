@@ -12,6 +12,10 @@ vi.mock("@repo/db", () => ({
   repos: { organization: {
     findById: async () => ({ ...h.org }),
     setBillingEntitlement: h.mirror,
+  }, cloudWorkspace: {
+    listByOrganization: async () => [{ ...h.org, id: "workspace_1", organizationId: "org_1", namespace: h.org.oblienNamespace }],
+    findByIdInOrganization: async (id: string, org: string) => id === "workspace_1" && org === "org_1" ? { ...h.org, id, organizationId: org, namespace: h.org.oblienNamespace } : undefined,
+    setBillingEntitlement: h.mirror,
   }, billingPlanGrant: { current: h.grant } },
   withAdvisoryLock: async (_key: string, work: () => Promise<unknown>) => work(),
 }));
@@ -33,6 +37,7 @@ import {
   complimentaryCloudPlan,
 } from "@repo/platform/engine/modules/billing/billing-catalog";
 import { planGrantPeriod } from "@repo/platform/engine/modules/billing/billing-plan-grants";
+import { monthlyCloudBilling } from "../../../test/helpers/monthly-cloud-offer";
 
 const entitlement = () => ({
   success: true as const, namespace: "os-customer", tierId: "pro", status: "active" as const,
@@ -52,6 +57,65 @@ beforeEach(() => {
   h.defaults.mockResolvedValue({ autoApply: true, quotaLimit: 0, overdraft: 0, suspendThreshold: 0, onOverdraftAction: "stop_workspaces" });
 });
 describe("Oblien-managed entitlements", () => {
+  function useMonthly() {
+    const state = monthlyCloudBilling();
+    h.subscription.mockResolvedValue({ namespace: state.entitlement.namespace, subscription: state.subscription });
+    h.entitlement.mockResolvedValue(state.entitlement);
+    h.balance.mockResolvedValue(state.balance);
+    return state;
+  }
+  it.each([null, 0, -100])("keeps a paid monthly server usable with an old credit balance of %s", async balance => {
+    const state = useMonthly();
+    state.entitlement.quota = { limit: 0, used: 3500, balance, alert: null };
+    h.balance.mockResolvedValue({ ...state.balance, balance });
+    expect(await getQuotaState("org_1")).toEqual({ quotaLimit: null, quotaUsed: 0, quotaRemaining: null });
+    await expect(assertNamespaceHasQuota("org_1")).resolves.toBeUndefined();
+    await expect(assertCloudCanSpend("org_1")).resolves.toBeUndefined();
+    expect(h.setQuota).not.toHaveBeenCalled();
+    expect(h.resetQuota).not.toHaveBeenCalled();
+  });
+  it("keeps paid compute when managed proxy transfer is exhausted", async () => {
+    const state = useMonthly();
+    state.entitlement.capacity!.network = { service: "managed_proxy_transfer", included: false,
+      purchasedBytes: 1024, consumedBytes: 1024, reservedBytes: 0, availableBytes: 0 };
+    await expect(assertCloudCanSpend("org_1")).resolves.toBeUndefined();
+  });
+  it("requires funded coverage even when the monthly subscription is fully sponsored", async () => {
+    const state = useMonthly();
+    state.subscription.offer!.unitAmount = 0;
+    await expect(assertCloudCanSpend("org_1")).resolves.toBeUndefined();
+    state.entitlement.computeCovered = state.entitlement.capacity!.computeCovered = false;
+    state.entitlement.capacity!.status = "payment_required";
+    h.balance.mockResolvedValue({ ...state.balance, computeCovered: false });
+    await expect(assertCloudCanSpend("org_1")).rejects.toMatchObject({ code: "CLOUD_BILLING_BLOCKED" });
+    expect(h.setQuota).not.toHaveBeenCalled();
+    expect(h.resetQuota).not.toHaveBeenCalled();
+  });
+  it("uses current paid coverage during a renewal payment problem", async () => {
+    const state = useMonthly();
+    state.subscription.status = "past_due";
+    state.entitlement.status = "past_due";
+    await expect(assertCloudCanSpend("org_1")).resolves.toBeUndefined();
+  });
+  it("honors manual provider suspension during a paid month", async () => {
+    const state = useMonthly();
+    h.balance.mockResolvedValue({ ...state.balance, blocking: true });
+    await expect(assertCloudCanSpend("org_1")).rejects.toMatchObject({ code: "CLOUD_BILLING_BLOCKED" });
+    // Management remains available so the customer can inspect or clean up.
+    await expect(assertNamespaceHasQuota("org_1")).resolves.toBeUndefined();
+  });
+  it.each(["expired", "revoked", "payment_required"] as const)("does not run monthly compute with %s coverage", async status => {
+    const state = useMonthly();
+    state.entitlement.computeCovered = state.entitlement.capacity!.computeCovered = false;
+    state.entitlement.capacity!.status = status;
+    h.balance.mockResolvedValue({ ...state.balance, computeCovered: false, blocking: true });
+    await expect(assertCloudCanSpend("org_1")).rejects.toMatchObject({ code: "CLOUD_BILLING_BLOCKED" });
+  });
+  it("fails closed when coverage and the later balance read disagree", async () => {
+    const state = useMonthly();
+    h.balance.mockResolvedValue({ ...state.balance, billingMode: "payg" });
+    await expect(assertCloudCanSpend("org_1")).rejects.toMatchObject({ code: "CLOUD_BILLING_BLOCKED" });
+  });
   it("keeps complimentary Pro through provider reconciliation while enforcing the real credit balance", async () => {
     const createdAt = new Date(Date.now() - 86_400_000);
     const period = planGrantPeriod(createdAt, new Date());
@@ -64,7 +128,7 @@ describe("Oblien-managed entitlements", () => {
     h.subscription.mockResolvedValue({ namespace: "os-customer", subscription: null });
     const result = await syncOblienEntitlement("org_1");
     expect(result).toMatchObject({ tier: "pro", subscription: null, grant: { id: "bpg-test" } });
-    expect(h.mirror).toHaveBeenCalledWith("org_1", "os-customer", {
+    expect(h.mirror).toHaveBeenCalledWith("workspace_1", "org_1", "os-customer", {
       planTierId: "pro", subscriptionStatus: "active", currentPeriodStart: period.start, currentPeriodEnd: period.end,
     });
     expect(complimentaryCloudPlan(result.grant!)).toMatchObject({ price: { monthly: 0 }, monthlyCredits: 3_500_000 });
@@ -177,7 +241,7 @@ describe("Oblien-managed entitlements", () => {
   it("mirrors the paid tier, billing status and exact provider period without writing quotas", async () => {
     const result = await syncOblienEntitlement("org_1");
     expect(result.tier).toBe("pro");
-    expect(h.mirror).toHaveBeenCalledWith("org_1", "os-customer", {
+    expect(h.mirror).toHaveBeenCalledWith("workspace_1", "org_1", "os-customer", {
       planTierId: "pro", subscriptionStatus: "active",
       currentPeriodStart: new Date("2026-09-01T00:00:00Z"), currentPeriodEnd: new Date("2026-10-01T00:00:00Z"),
     });

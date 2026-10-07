@@ -139,12 +139,12 @@ describe("openship domain verify", () => {
     expect(err).toContain("route/CNAME: missing");
   });
 
-  it("prints the raw result and does NOT exit 1 in json mode even when unverified", async () => {
+  it("prints the raw result and exits 1 in JSON mode when unverified", async () => {
     setJsonMode(true);
     const body = { verified: false, cnameVerified: false, txtVerified: false };
     fetchStub = stubFetch(() => ({ status: 422, json: body }));
     const { out, code } = await runCommand(domainCommand, ["verify", "d1"]);
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(JSON.parse(out)).toEqual(body);
   });
 
@@ -240,12 +240,12 @@ describe("openship domain verify-ssl", () => {
     expect(code).toBe(1);
   });
 
-  it("does NOT exit 1 in json mode even when the cert is not valid", async () => {
+  it("prints the certificate result and exits 1 in JSON mode when invalid", async () => {
     setJsonMode(true);
     const data = { domain: "app.example.com", sslStatus: "pending", verified: false };
     fetchStub = stubFetch(() => ({ json: { data } }));
     const { out, code } = await runCommand(domainCommand, ["verify-ssl", "d1"]);
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(JSON.parse(out)).toEqual(data);
   });
 });

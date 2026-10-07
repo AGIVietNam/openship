@@ -67,7 +67,7 @@ function greeting(name?: string | null) {
 /** Public acknowledgements contain no user-supplied text or links. */
 export function supportEmail(input: {
   id: string;
-  kind: "receipt" | "notification" | "reply";
+  kind: "receipt" | "notification" | "reply" | "customer_reply";
   name: string;
   email: string;
   subject: string;
@@ -81,7 +81,9 @@ export function supportEmail(input: {
     ? `Your support request has been saved.\n\nReference: ${input.id}\n\nThe Openship team will reply by email. If you have more details, reply to this email and keep the reference in the subject.\n\nOpenship Support\n${SUPPORT_EMAIL}`
     : input.kind === "notification"
       ? `New Openship support request\n\nReference: ${input.id}\nFrom: ${input.name} <${input.email}>\nSubject: ${input.subject}\n\n${input.message}`
-      : `${input.reply}\n\nReference: ${input.id}\nOpenship Support\n${SUPPORT_EMAIL}`;
+      : input.kind === "customer_reply"
+        ? `New reply from ${input.name} <${input.email}>\n\nReference: ${input.id}\nSubject: ${input.subject}\n\n${input.reply}`
+        : `${input.reply}\n\nReference: ${input.id}\nOpenship Support\n${SUPPORT_EMAIL}`;
   return {
     subject,
     text,

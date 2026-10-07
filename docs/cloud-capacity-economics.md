@@ -1,81 +1,127 @@
-# Cloud capacity and unit economics — 2026-09-30
+# Cloud monthly capacity and provider handoff — 2026-10-04
 
-Version 6 offers **$5 / $20 / $39 / $99** Hobby / Starter / Pro / Scale plans,
-with **400 / 1,700 / 3,500 / 9,000** metered credits. Hobby storage increases to
-25 GB and a Starter workspace can use its existing 32 GB storage pool, preserving
-disk capacity on upgrade. The other v4 capacity limits remain: one service can use
-up to the full shared CPU pool and half the RAM: **1 vCPU / 2 GB**, **2 vCPU / 3 GB**,
-**4 vCPU / 4 GB**, and **8 vCPU / 8 GB**. Pro and Scale VM CPU ceilings remain
-4 and 8 vCPU so those service sizes can be provisioned. The $39 Pro payment funds
-3,900 wallet credits, above its unchanged 3,500-credit allowance. Existing paid
-snapshots keep their purchased prices and limits.
-The prior capacity fixes and
-source-builder corrections remain in place. [The catalog reference](../packages/core/src/pricing/README.md)
-is the exact customer contract, including saved v1–v5 renewal behavior.
+This is a historical provider-price comparison for the resource sizes below.
+For current retail resources, see [the pricing catalog](../packages/core/src/pricing/README.md).
 
-## Hardware and revenue budget
+Openship and Oblien are part of the same company. The product decision is to sell
+one managed server per subscription, with CPU, RAM and disk covered continuously
+for the paid month. Keep the agreed retail prices and resources:
 
-The operator supplied $70/month for 12 physical cores, 64 GB RAM and 1 TB storage.
-It is a hardware cost, not a complete operating cost. Plan ceilings are shared
-virtual CPU limits and maximum allocation; they are not dedicated physical cores
-or a promise of continuous use for the subscription price. Keep fleet admission
-and operational headroom independent of retail namespace limits.
+| Plan | Retail/month | vCPU | RAM | Disk | Published provider/month |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hobby | $5 | 1 | 4 GiB | 25 GiB | $11.25 |
+| Starter | $20 | 2 | 8 GiB | 32 GiB | $21.60 |
+| Pro | $39 | 4 | 16 GiB | 128 GiB | $46.40 |
+| Scale | $99 | 8 | 32 GiB | 256 GiB | $92.80 |
 
-For planning, assume another $25/node/month for operations, card fees of 2.9% plus
-$0.30 per payment, and a 2% refund reserve. These assumptions need actual invoices.
-With $200 revenue from ten payments, contribution is $92.20 (46.1%); with $300 from
-fifteen payments it is $185.80 (61.9%). At a $20 average charge, break-even is about
-$102/node/month and a 60% contribution target needs about $283. These exclude tax,
-company payroll and other unmodelled expenses. Safe workload density must support
-the revenue target: three $39 Pro subscriptions only leave $15.37 under this model.
-Do not use CPU oversubscription or credit expiry as a substitute for measurement.
+The provider amounts above are a dated comparison against
+`GET https://api.oblien.com/billing/capacity/catalog`, tariff
+`workspace-capacity-2026-10-v1`: 600 cents/vCPU, 100 cents/GiB RAM,
+5 cents/GiB disk, with a 500-cent monthly minimum. They are not copied into
+Openship's runtime pricing code. The live provider owns price and admission.
 
-At company level, count the customer's payment once. Funding the Openship-owned
-Oblien wallet is an internal transfer, not additional company revenue. At the
-100 credits/USD funding rate, every ordinary allowance and top-up is funded by
-its payment. Promotional subsidy must be separately budgeted and recorded.
+## Message for the Oblien team
 
-## Usage pricing
+> Keep Openship monthly retail at Hobby $5 (1 vCPU / 4 GiB / 25 GiB), Starter $20
+> (2 / 8 / 32), Pro $39 (4 / 16 / 128), and Scale $99 (8 / 32 / 256), one managed
+> workspace per subscription. The published capacity tariff currently costs
+> $11.25 / $21.60 / $46.40 / $92.80 for those sizes. Please configure the agreed
+> Openship provider tariff, or explicit company subsidy support, so
+> `/billing/checkout` and subscription plan changes accept these retail prices.
+> We send `offer.billingMode: "monthly"`, `credits: 0`, the resource pool and no
+> credit policy. A confirmed payment must cover CPU, RAM and disk for the full
+> paid month regardless of old credits or owner-wallet balance. Apply this to
+> Custom sizes too and retain saved renewal terms. Please confirm the tariff
+> identifier and verify checkout, renewal, proration and refund settlement at
+> these prices; we will keep using the existing generic APIs.
 
-One credit is not one minute. Current legacy Oblien workspace rates are 1.5
-credits/active CPU-minute, 0.2/measured RSS GiB-minute and 0.15/GB of RX+TX transfer.
-Workspace flush does not charge disk I/O. The legacy monthly discounts are 700
-credits/vCPU for CPU, 100/GiB for memory and 100/vCPU for network. They are separate
-from namespace budgets. The matching Oblien fix persists discount use with wallet,
-namespace usage and ledger writes in one SQL transaction, scoped to owner,
-namespace, workspace and UTC calendar month. Restart, top-up or quota reset cannot
-replenish a consumed discount. Node billing windows must also replay unchanged
-after a lost acknowledgement. Deploy and verify both halves before relying on it.
+No new customer credit budget should be introduced to compensate for an internal
+provider-price mismatch. Lower retail prices require an agreed tariff or explicit
+subsidy at the provider boundary. A generated checkout URL is not evidence of
+successful payment or infrastructure funding.
 
-The proposed next Oblien compute card is **preview only**: $0.030/active vCPU-hour,
-$0.008/reserved GiB-hour, $0.10/retained GiB-month and $0.05/public-egress GB.
-Reserved RAM, retained disk and public egress require different meters from RSS,
-disk I/O and RX+TX. Activating those rates requires matching meters and seven days
-of usage/cost validation. They must not be advertised as the current billing rate.
+## Usage, extras and internal accounting
 
-Hobby is a finite trial-sized paid allowance, not a $5 always-on VM. Explain that
-before checkout. Top-ups (400/$5, 1,700/$20, 4,500/$50) buy additional consumption
-without changing hardware limits; a capacity increase requires a plan upgrade.
-Alerts and recovery use the provider's namespace balance, including purchased
-credits. Grace stays zero unless the reseller explicitly configures it.
+The same deployed catalog publishes PAYG at $0.030/active vCPU-hour,
+$0.008/reserved GiB-hour and $0.05/retained GiB-month, with a compute cap at
+125% of the saved monthly capacity price. These are measured usage dimensions,
+not conversions from old namespace credits or estimates of full utilization.
+Use provider-reported savings for historical comparisons; do not promise a
+universal monthly discount from hypothetical load.
 
-## Verification and rollout
+Optional managed proxy transfer is separate at $0.10/GiB, with a $5 minimum
+purchase. Public app routing is not the paid managed internet proxy. Backups are
+not included in provider compute. After expiry, disks remain for at least
+30 days without automatic deletion; storage remains billable until deleted.
 
-1. Deploy the generic Oblien aggregate-capacity API and additive schema first.
-   Require `reseller.aggregateResourceLimits` before enabling new sales.
-2. Deploy this Openship API/dashboard together. Published SDK 2.5.0 is sufficient.
-3. Reconcile organizations through the billing sweep or guarded Cloud actions.
-   v1 paid credits and periods remain unchanged; pre-v4 finite safety ceilings
-   still bound inherited capacity. v2/v3/v4/v5 saved commercial terms and per-service
-   ceilings remain intact.
-4. Review oversized existing Docker hosts while no deployment is in progress.
-   The shared helper reduces CPU/RAM only after checking ownership, namespace
-   binding and bounded running containers. It retains disks and restores exactly
-   the captured running services.
-5. Verify provider allocation diagnostics, paid upgrades, top-ups, renewal replay,
-   and signed webhooks. A checkout return alone does not prove credit delivery.
-   Run payment tests in an isolated provider environment, not on a real customer.
+Monthly contracts use no additional compute-credit top-ups. Existing metered
+subscriptions keep their saved allowance until an explicit plan change. Customer
+PAYG checkout remains unavailable because the current wallet-confirmation API
+uses the reseller's wallet rather than a tenant-funded payment balance.
 
-Financial grants and checkpoints commit atomically in SQL. Stripe, SQL and VM
-operations use durable work and idempotent recovery; they are not one distributed
-transaction. Ambiguous VM operations retain capacity until provider state is known.
+Count customer revenue once across the company. Moving funds to the internal
+provider wallet is not a second sale. Actual fleet costs, safe placement density,
+card fees and operational headroom belong to infrastructure/finance planning;
+Openship does not approximate them to bypass provider admission.
+
+## Prepaid PAYG pricing preview
+
+The UI now previews one customer balance funding multiple independently sized
+managed servers. Monthly hosts keep one subscription each. Both use the same
+server acquisition and deployment architecture; selecting a purchase view does
+not switch an existing server's contract.
+
+Suggested prepaid deposits are $5, $20, $50 and $100. At the published conversion
+of 100 credits per dollar, they represent 500, 2,000, 5,000 and 10,000 credits.
+There are no hidden package discounts or legacy allowance conversions. These
+are display selections, not new entries in the old namespace top-up catalog.
+
+PAYG uses the provider's published resource rates, credit conversion and
+reference period length. It reuses the monthly resource controls but does not
+request monthly quotes or derive a retail ceiling from monthly host prices.
+Provider settlement terms remain owned by Oblien. The UI is a pricing preview
+and cannot initiate PAYG checkout, even if the catalog's availability flag
+changes. No wallet, quota, subscription or deployment mutation is introduced
+by the estimator.
+
+Estimates use identical hosts and constant CPU activity. RAM is charged while
+reserved and disk while retained. Balance duration is prepaid funds divided by
+resource usage cost. The range varies CPU activity from full to idle while
+keeping RAM and storage billable. Several hosts multiply usage, never the
+customer's deposit. This is a UI estimate, not financial settlement, admission
+or recorded savings.
+
+## Additional handoff for Oblien
+
+> Please add customer-scoped prepaid funding to the existing capacity model.
+> Stripe deposits should fund one customer/organization wallet which can pay
+> for multiple server namespaces; those balances must not borrow funds from
+> another customer or the reseller's general wallet. Quote and enforce prepaid
+> resource usage independently of monthly host prices, with saved terms.
+> Keep the published resource rates and explicit credit
+> conversion visible. Deduplicate deposits and usage, enforce concurrent spending
+> through bounded reservations, and expose balance, per-server usage and
+> low-balance events through the existing signed flow. Monthly servers must not
+> debit this compute balance. Before strict prepaid purchases open, agree a
+> funded storage-retention policy: compute shutdown alone does not stop reserved
+> RAM or retained-disk costs, and the current retention flow can create storage
+> debt. We need an explicit reserve, funded grace period or agreed deletion policy,
+> with no surprise postpaid bill. Keep custody, metering and settlement in Oblien;
+> Openship will present and orchestrate the existing APIs.
+
+## Verification
+
+Openship validates the published catalog, saved monthly capacity/entitlement,
+provider blocking flag, zero-credit checkout fulfillment and signed event
+reconciliation. Upgrade prices and dates come from Oblien. Resource reductions
+and billing-model changes wait for renewal; paid upgrades use the existing
+restart review and durable server worker.
+
+Local integration tests simulate provider transport and settlement. They cover
+empty legacy balances, stale credit warnings, namespace isolation, checkout
+retries, renewal changes and provisioning, but do not establish a successful
+live purchase. Verify the agreed tariff and the complete signed
+payment-to-server cycle in the intended provider environment before rollout.
+
+See [the catalog contract](../packages/core/src/pricing/README.md) and
+[Cloud release gate](openship-cloud-launch.md).

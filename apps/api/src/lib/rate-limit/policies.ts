@@ -33,9 +33,17 @@ export type PolicyId =
   | "write-authed"
   | "webhook-ingress"
   | "billing-portal"
-  | "support-contact";
+  | "support-contact"
+  | "support-reply";
 
 export const POLICIES: Record<PolicyId, RateLimitPolicy> = {
+  "support-reply": {
+    id: "support-reply",
+    limit: 30,
+    windowMs: 15 * MINUTE_MS,
+    subject: "user",
+    description: "New replies to Cloud support tickets per authenticated customer, across API replicas.",
+  },
   // Intake has no account requirement. The route checks this policy directly
   // using a hashed contact identity, alongside the ordinary per-IP limit.
   "support-contact": {

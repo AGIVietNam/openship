@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "./sidebar";
 import { Logo } from "./logo";
 import { useBrandName, useI18n } from "./i18n-provider";
+import { SidebarLayoutProvider } from "@/context/SidebarLayoutContext";
 
 /** Keep the page usable on phones; navigation opens above it, without taking its width. */
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -30,7 +31,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return () => { trigger.current?.focus(); };
   }, [mobileOpen]);
 
-  return <div className="relative flex min-h-0 flex-1 flex-col md:flex-row">
+  return <SidebarLayoutProvider><div className="relative flex min-h-0 flex-1 flex-col md:flex-row">
     <header inert={mobileOpen} className="flex h-14 shrink-0 items-center justify-between border-b border-border/40 px-4 md:hidden">
       <span className="flex items-center gap-2.5 text-sm font-semibold text-foreground"><Logo size={24} />{brand}</span>
       <button ref={trigger} type="button" onClick={() => setMobileOpen(true)} aria-label={t.dashboard.sidebar.expand}
@@ -56,5 +57,5 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
     </div>
     <main inert={mobileOpen} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain">{children}</main>
-  </div>;
+  </div></SidebarLayoutProvider>;
 }

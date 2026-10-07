@@ -230,7 +230,7 @@ export function useDeploymentBuild(
   setConfig: React.Dispatch<React.SetStateAction<DeploymentConfig>>,
 ) {
   const { showToast } = useToast();
-  const showCloudPricing = useCloudDeployPricing();
+  const showCloudPricing = useCloudDeployPricing(config.workspaceId);
   // `connected` is read, not just `requireCloud`: the catch below has to tell
   // "connecting is the missing step" from "we already think we're connected and the
   // server still said no" — the two cases requireCloud's return value conflates.
@@ -342,6 +342,7 @@ export function useDeploymentBuild(
         deploymentFailed: false,
         deploymentCanceled: false,
         cancellationPending: false,
+        pendingPrompt: null,
         currentProgress: 100,
         currentStepIndex: 5,
         isDeploying: false,
@@ -399,6 +400,7 @@ export function useDeploymentBuild(
         deploymentSuccess: false,
         deploymentCanceled: false,
         cancellationPending: false,
+        pendingPrompt: null,
         isDeploying: false,
         failureMessage: errorMessage,
         warningMessage: "",
@@ -523,7 +525,7 @@ export function useDeploymentBuild(
         handleSuccessMessage(data);
         // A worker runs a container and streams logs like a web app; only a
         // static (edge-served files) deploy has no container to stream (#538).
-        if (workloadOf(config.options) !== "static") {
+        if ((workloadOf(config.options) !== "static" || !!config.workspaceId)) {
           canStreamContainer.current = true;
         }
         buildStream.disconnect();
@@ -786,6 +788,7 @@ export function useDeploymentBuild(
       // Step 1: Ensure project exists
       const projectData = await projectsApi.ensure({
         projectId: ensuredProjectId || undefined,
+        serverId: config.deployTarget === "server" || config.deployTarget === "cloud" ? config.serverId : undefined,
         name: config.projectName || config.repo || config.localPath?.split("/").pop() || "project",
         gitOwner: isSourceless ? undefined : config.owner || undefined,
         gitRepo: isSourceless ? undefined : config.repo || undefined,
@@ -920,9 +923,8 @@ export function useDeploymentBuild(
             ? "server"
             : (overrides?.buildStrategy ?? config.buildStrategy),
         deployTarget: config.deployTarget,
-        // Only a server target uses serverId — never let a stale id ride along
-        // with a cloud/local deploy (backend gates it too, but be explicit).
-        serverId: config.deployTarget === "server" ? config.serverId : undefined,
+        // Managed Cloud workspaces and SSH hosts share the execution reference.
+        serverId: config.deployTarget === "server" || config.deployTarget === "cloud" ? config.serverId : undefined,
         // Git-credential forwarding is no longer a per-deploy choice — it's a
         // generic per-operator setting (Settings → GitHub) the API reads directly.
         // Clone location — only meaningful for a server target. Clone-on-server
@@ -949,12 +951,12 @@ export function useDeploymentBuild(
         // so gate on the workload, not the legacy hasServer boolean (a worker
         // shares hasServer=false with a static site).
         cloudResourceTier:
-          config.deployTarget === "cloud" && workloadOf(config.options) !== "static"
+          config.deployTarget === "cloud" && (workloadOf(config.options) !== "static" || !!config.workspaceId)
             ? config.cloudResourceTier
             : undefined,
         cloudResourceCustom:
           config.deployTarget === "cloud" &&
-          workloadOf(config.options) !== "static" &&
+          (workloadOf(config.options) !== "static" || !!config.workspaceId) &&
           config.cloudResourceTier === "custom"
             ? config.cloudResourceCustom
             : undefined,
@@ -1057,8 +1059,9 @@ export function useDeploymentBuild(
   }, [state.deploymentId, buildStream]);
 
   // Recover a disconnected stream or a queued build's missing start timestamp,
-  // reconcile terminal timing, and wait for cancellation acknowledgement. Never
-  // overlap reads or keep polling a settled result.
+  // reconcile terminal timing, and wait for cancellation acknowledgement. A held
+  // prompt also polls: its answer may come from another tab or lose its HTTP
+  // acknowledgement. Never overlap reads or keep polling a settled result.
   useEffect(() => {
     const deploymentId = state.deploymentId;
     const active =
@@ -1072,7 +1075,7 @@ export function useDeploymentBuild(
     const needsStatus =
       waitingCancellation ||
       needsTerminalStatus ||
-      (active && (!buildStream.isConnected || !state.buildStartedAt));
+      (active && (!buildStream.isConnected || !state.buildStartedAt || !!state.pendingPrompt));
     if (!deploymentId || !needsStatus) return;
 
     let cancelled = false;
@@ -1120,6 +1123,11 @@ export function useDeploymentBuild(
             deploymentFailed: !isLive && status === "failed",
             deploymentCanceled: !isLive && status === "cancelled",
             cancellationPending: !!data.cancellationPending,
+            pendingPrompt: isLive
+              ? data.pendingPrompt?.promptId === prev.pendingPrompt?.promptId
+                ? prev.pendingPrompt
+                : (data.pendingPrompt ?? null)
+              : null,
             buildStartedAt: data.buildStartedAt ?? null,
             buildDurationMs: data.buildDurationMs ?? null,
             phaseDurations: data.phaseDurations ?? prev.phaseDurations,
@@ -1169,6 +1177,7 @@ export function useDeploymentBuild(
     state.deploymentFailed,
     state.deploymentCanceled,
     state.cancellationPending,
+    state.pendingPrompt,
     state.buildStartedAt,
     buildStream.isConnected,
     buildStream.disconnect,
@@ -1272,6 +1281,7 @@ export function useDeploymentBuild(
             // than the "bare" default.
             runtimeMode: apiConfig.runtimeMode || prev.runtimeMode,
             serverId: apiConfig.serverId ?? prev.serverId,
+            workspaceId: apiConfig.managedWorkspaceId ?? prev.workspaceId,
             serverName: apiConfig.serverName ?? prev.serverName,
             envVars: apiConfig.envVars || prev.envVars,
             projectType: data.projectType || prev.projectType,
@@ -1343,6 +1353,7 @@ export function useDeploymentBuild(
           deploymentFailed: !isActive && status === "failed",
           deploymentCanceled: !isActive && status === "cancelled",
           cancellationPending: !!data.cancellationPending,
+          pendingPrompt: isActive ? (data.pendingPrompt ?? null) : null,
           isDeploying: isLive,
           screenshots: !isActive ? (data.screenshots || []) : [],
           failureMessage: !isActive
@@ -1580,16 +1591,31 @@ export function useDeploymentBuild(
     }));
   }, []);
 
-  const respondToPrompt = useCallback(async (action: string) => {
-    if (!state.deploymentId) return;
-    setState((prev) => ({ ...prev, pendingPrompt: null }));
-    try {
-      await deployApi.buildRespond(state.deploymentId, action);
-    } catch (err) {
-      console.error("[Deployment] Failed to respond to prompt:", err);
-      showToast("Failed to respond to prompt", "error", "Error");
-    }
-  }, [state.deploymentId, showToast]);
+  const respondToPrompt = useCallback(
+    async (action: string) => {
+      const { deploymentId, pendingPrompt } = state;
+      if (!deploymentId || !pendingPrompt) throw new Error("No deployment decision is pending.");
+      try {
+        const result = await deployApi.buildRespond(deploymentId, action);
+        if (!result?.success)
+          throw new Error(
+            "This decision is no longer pending. Refresh to see the current deployment state.",
+          );
+        // A quick retry can publish the NEXT prompt before this request returns.
+        // Clear only the decision this request answered, never its replacement.
+        setState((prev) =>
+          prev.pendingPrompt?.promptId === pendingPrompt.promptId
+            ? { ...prev, pendingPrompt: null }
+            : prev,
+        );
+      } catch (err) {
+        console.error("[Deployment] Failed to respond to prompt:", err);
+        showToast("Failed to respond to prompt", "error", "Error");
+        throw err;
+      }
+    },
+    [state.deploymentId, state.pendingPrompt, showToast],
+  );
 
   return {
     state,

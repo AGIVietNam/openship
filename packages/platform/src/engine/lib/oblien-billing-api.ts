@@ -2,6 +2,8 @@ import { z } from "zod";
 import { AppError } from "@repo/core";
 import { OperationError } from "@repo/contracts";
 import { Oblien } from "@repo/adapters";
+import { isDeepStrictEqual } from "node:util";
+import { computeBillingModeSchema, oblienCapacityCatalogSchema, oblienCapacityPoolSchema, oblienNamespaceCapacitySchema } from "./oblien-capacity";
 
 // Oblien owns payments and credits. Validate its SDK responses at our tenant
 // boundary before returning customer data or hosted billing session URLs.
@@ -9,6 +11,15 @@ const amount = z.number().finite();
 const allowance = amount.nonnegative().nullable();
 const date = z.string().refine((value) => Number.isFinite(Date.parse(value))).nullable();
 const namespace = z.string().min(1).max(128);
+const timestamp = (value: string | null) => value === null ? null : Date.parse(value);
+// These validation refusals occur before a checkout is opened. Use the original
+// provider status: an operator's funding or eligibility error is presented as 503.
+const REJECTED_CHECKOUT_CODES = new Set([
+  "invalid_plan", "invalid_pack", "invalid_offer", "invalid_redirect_url",
+  "billing_redirect_not_allowed", "reseller_enterprise_required", "billing_offer_underfunded",
+  "capacity_price_below_cost", "insufficient_redeemable_balance",
+]);
+const EXPIRED_CHECKOUT_CODES = new Set(["checkout_expired", "capacity_checkout_expired"]);
 
 export const oblienCatalogSchema = z.object({
   success: z.literal(true),
@@ -61,6 +72,9 @@ export const oblienEntitlementSchema = z.object({
   tierId: z.string().nullable(),
   status: z.enum(["active", "past_due", "canceled", "credit_exhausted"]),
   periodStart: date, periodEnd: date,
+  billingMode: computeBillingModeSchema.optional(),
+  computeCovered: z.boolean().optional(),
+  capacity: oblienNamespaceCapacitySchema.nullable().optional(),
   // Preserve signed legacy usage; the provider's limit includes purchased credits.
   quota: z.object({
     limit: allowance,
@@ -68,8 +82,20 @@ export const oblienEntitlementSchema = z.object({
     balance: amount.nullable(),
     overdraft: amount.nonnegative().optional(),
     suspendThreshold: allowance.optional(),
-    alert: oblienQuotaAlertSchema.optional(),
+    alert: oblienQuotaAlertSchema.nullable().optional(),
   }),
+}).superRefine((value, ctx) => {
+  if (value.tierId !== "capacity") {
+    if (value.capacity || value.billingMode === "monthly")
+      ctx.addIssue({ code: "custom", message: "Capacity requires a capacity entitlement" });
+    return;
+  }
+  const capacity = value.capacity;
+  if (!capacity || capacity.namespace !== value.namespace || capacity.billingMode !== value.billingMode ||
+      capacity.computeCovered !== value.computeCovered || timestamp(capacity.periodStart) !== timestamp(value.periodStart) ||
+      timestamp(capacity.periodEnd) !== timestamp(value.periodEnd)) {
+    ctx.addIssue({ code: "custom", message: "Capacity entitlement does not match its saved contract" });
+  }
 });
 
 export const oblienOfferResourceLimitsSchema = z.object({
@@ -85,9 +111,12 @@ export const oblienOfferSchema = z.object({
   reference: z.string().min(1).max(100).optional(),
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
-  unitAmount: amount.int().min(100).max(1_000_000),
+  unitAmount: amount.int().nonnegative().max(1_000_000),
   currency: z.literal("usd"),
-  credits: amount.int().min(1).max(1_000_000_000),
+  billingMode: computeBillingModeSchema.optional(),
+  capacity: oblienCapacityPoolSchema.optional(),
+  tariffId: z.string().min(1).optional(),
+  credits: amount.int().min(0).max(1_000_000_000),
   policy: z
     .object({
       overdraft: amount.int().nonnegative(),
@@ -97,8 +126,52 @@ export const oblienOfferSchema = z.object({
     .refine((value) => value.suspendThreshold >= value.overdraft)
     .optional(),
   resourceLimits: oblienOfferResourceLimitsSchema.optional(),
+}).superRefine((value, ctx) => {
+  // A sponsored monthly offer charges the customer zero; Oblien still requires
+  // the reseller's wallet to fund its capacity before granting coverage.
+  if (value.unitAmount < 100 && !(value.unitAmount === 0 && value.billingMode === "monthly"))
+    ctx.addIssue({ code: "custom", path: ["unitAmount"], message: "Offers require at least 100 cents unless monthly capacity is fully sponsored" });
+  if (value.billingMode === "monthly") {
+    if (!value.capacity || value.credits !== 0 || value.policy !== undefined)
+      ctx.addIssue({ code: "custom", message: "Monthly capacity requires a pool, zero credits and no credit policy" });
+  } else if (value.credits <= 0 || value.capacity !== undefined || value.tariffId !== undefined) {
+    ctx.addIssue({ code: "custom", message: "Metered offers require credits and cannot purchase capacity" });
+  }
 });
 export type OblienOffer = z.infer<typeof oblienOfferSchema>;
+
+const billingId = z.string().min(1).max(255).regex(/^[A-Za-z0-9_-]+$/);
+const cents = amount.int().nonnegative();
+export const oblienPlanChangeInputSchema = z.object({
+  offer: oblienOfferSchema,
+  metadata: z.record(z.string(), z.string()),
+  billingInterval: z.enum(["monthly", "yearly"]),
+  idempotencyKey: z.string().min(1).max(128),
+}).refine(value => value.offer.billingMode !== "monthly" || value.billingInterval === "monthly",
+  "Monthly capacity requires a monthly subscription");
+export type OblienPlanChangeInput = z.infer<typeof oblienPlanChangeInputSchema>;
+export const oblienPlanChangeQuoteSchema = z.object({
+  id: billingId, namespace, direction: z.enum(["upgrade", "downgrade"]),
+  expiresAt: date.unwrap(), effectiveAt: date.unwrap(),
+  billingInterval: z.enum(["monthly", "yearly"]),
+  current: oblienOfferSchema, next: oblienOfferSchema, currency: z.literal("usd"),
+  unusedTimeCredit: cents, remainingTimeCharge: cents, amountDueNow: cents,
+  nextInvoiceAmount: cents.nullable(), includedCreditIncrease: amount.nonnegative(),
+  preservesUsage: z.literal(true), preservesPurchasedCredits: z.literal(true),
+});
+export const oblienPlanChangeSchema = z.object({
+  id: billingId, quoteId: billingId, namespace,
+  direction: z.enum(["upgrade", "downgrade"]),
+  status: z.enum(["queued", "dispatching", "payment_pending", "scheduled", "canceling",
+    "reconciliation_required", "applied", "canceled", "expired", "failed"]),
+  effectiveAt: date.unwrap(), current: oblienOfferSchema, next: oblienOfferSchema,
+  amountDueNow: cents, currency: z.literal("usd"), includedCreditIncrease: amount.nonnegative(),
+  payment: z.object({ status: z.string(), url: z.url().nullable(), expiresAt: date }).nullable(),
+  error: z.object({ code: z.string().max(128), message: z.string().max(2000) }).nullable(),
+  cancelable: z.boolean(), appliedAt: date,
+});
+export type OblienPlanChangeQuote = z.infer<typeof oblienPlanChangeQuoteSchema>;
+export type OblienPlanChange = z.infer<typeof oblienPlanChangeSchema>;
 
 const policySchema = z.object({
   success: z.literal(true), service: z.literal("workspace_vm"),
@@ -121,6 +194,7 @@ export const oblienSubscriptionSchema = z.object({
       canceledAt: date,
       offer: oblienOfferSchema.optional(),
       metadata: z.record(z.string(), z.string()).optional(),
+      pendingChange: oblienPlanChangeSchema.nullable().optional(),
     })
     .nullable(),
 });
@@ -131,24 +205,34 @@ export type OblienBillingPolicy = z.infer<typeof policySchema>;
 export type OblienSubscription = z.infer<typeof oblienSubscriptionSchema>["subscription"];
 /** An echoed namespace alone cannot prove a paid entitlement belongs to it. */
 export function assertOblienEntitlementMatchesSubscription(entitlement: OblienEntitlement, subscription: OblienSubscription): void {
-  const timestamp = (value: string | null) => value === null ? null : Date.parse(value);
-  if ((entitlement.tierId ?? "free") !== (subscription?.tierId ?? "free") ||
+  const monthly = subscription?.offer?.billingMode === "monthly";
+  const expectedTier = monthly ? "capacity" : subscription?.tierId ?? "free";
+  const capacity = entitlement.capacity;
+  if ((entitlement.tierId ?? "free") !== expectedTier ||
+      (monthly && (!capacity || capacity.namespace !== entitlement.namespace || capacity.provider !== "stripe" ||
+        capacity.billingMode !== "monthly" || entitlement.billingMode !== "monthly" ||
+        capacity.computeCovered !== entitlement.computeCovered ||
+        !isDeepStrictEqual(capacity.capacity, subscription!.offer!.capacity) ||
+        timestamp(capacity.periodStart) !== timestamp(entitlement.periodStart) || timestamp(capacity.periodEnd) !== timestamp(entitlement.periodEnd))) ||
       (!subscription && (entitlement.periodStart !== null || entitlement.periodEnd !== null)) ||
       (subscription && timestamp(subscription.periodStart) !== timestamp(entitlement.periodStart)) ||
       (subscription && timestamp(subscription.periodEnd) !== timestamp(entitlement.periodEnd)) ||
-      (entitlement.status === "active" && subscription && !["active", "trialing"].includes(subscription.status))) {
+      (!monthly && entitlement.status === "active" && subscription && !["active", "trialing"].includes(subscription.status))) {
     throw new AppError("Cloud billing returned an entitlement that does not match this organization's subscription", 502, "OBLIEN_ENTITLEMENT_MISMATCH");
   }
 }
 
-export type OblienCheckout = {
-  namespace: string;
-  successUrl: string;
-  cancelUrl: string;
-  idempotencyKey: string;
-  offer: OblienOffer;
-  metadata: Record<string, string>;
-} & ({ kind: "subscription"; billingInterval: "monthly" | "yearly" } | { kind: "topup" });
+const checkoutInput = z.object({
+  namespace: z.string().min(1), successUrl: z.url(), cancelUrl: z.url(),
+  idempotencyKey: z.string().min(1), offer: oblienOfferSchema, metadata: z.record(z.string(), z.string()),
+});
+export const oblienCheckoutInputSchema = z.discriminatedUnion("kind", [
+  checkoutInput.extend({ kind: z.literal("subscription"), billingInterval: z.enum(["monthly", "yearly"]) }),
+  checkoutInput.extend({ kind: z.literal("topup") }),
+]).refine(value => value.offer.billingMode !== "monthly" ||
+  (value.kind === "subscription" && value.billingInterval === "monthly"),
+  "Monthly capacity requires a monthly subscription");
+export type OblienCheckout = z.infer<typeof oblienCheckoutInputSchema>;
 
 /** Log only a bounded error identifier, never provider messages or payment data. */
 function providerErrorCode(payload: unknown): string {
@@ -192,7 +276,7 @@ export class OblienBillingApi {
     }
     this.baseUrl = url.toString().replace(/\/+$/, "");
     this.fetcher = options.fetch ?? fetch;
-    // SDK 2.4 has no client-wide fetch/timeout option. Replace this transport
+    // The SDK has no client-wide fetch/timeout option. Replace this transport
     // so the official billing module owns endpoints and request formatting while
     // we retain timeouts, strict HTTP errors, and credential-safe redirects.
     const client = new Oblien({ token: "", baseUrl: this.baseUrl });
@@ -206,7 +290,7 @@ export class OblienBillingApi {
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
-    const publicRead = method === "GET" && path === "/billing/catalog";
+    const publicRead = method === "GET" && (path === "/billing/catalog" || path === "/billing/capacity/catalog");
     const headers: Record<string, string> = { Accept: "application/json" };
     if (!publicRead) {
       if (!this.options.clientId || !this.options.clientSecret) {
@@ -232,16 +316,21 @@ export class OblienBillingApi {
     if (!response.ok || (payload as { success?: unknown } | null)?.success !== true) {
       // Do not forward provider bodies: they can contain account or payment data.
       const code = providerErrorCode(payload);
+      const capacityUnavailable = code === "capacity_unavailable" || code === "billing_capacity_unavailable";
       const diagnostic = providerDiagnostic(payload, [this.options.clientId, this.options.clientSecret]);
+      const checkoutExpired = method === "POST" && path === "/billing/checkout" &&
+        response.status === 410 && EXPIRED_CHECKOUT_CODES.has(code);
       // Oblien can return SQL failures as HTTP 400. Those are provider faults,
       // not invalid customer input; preserving 400 also hid them from API logs.
-      const providerFailure = PROVIDER_FAILURES.has(code) || /^ER_[A-Z0-9_]+$/.test(code) || ![400, 404, 409, 422, 429].includes(response.status);
+      const providerFailure = PROVIDER_FAILURES.has(code) || /^ER_[A-Z0-9_]+$/.test(code) ||
+        (!checkoutExpired && ![400, 404, 409, 422, 429].includes(response.status));
       const status = providerFailure ? 503 : response.status;
       console.warn("[oblien:billing] Provider request failed", {
         method,
         operation: path
           .replace(/^\/billing\/policy\/[^/]+/, "/billing/policy/:namespace")
-          .replace(/^\/billing\/checkout\/[^/]+/, "/billing/checkout/:checkoutId"),
+          .replace(/^\/billing\/checkout\/[^/]+/, "/billing/checkout/:checkoutId")
+          .replace(/^\/billing\/subscription\/changes\/[^/]+/, "/billing/subscription/changes/:changeId"),
         providerStatus: response.status, providerCode: code,
         ...diagnostic,
       });
@@ -256,8 +345,11 @@ export class OblienBillingApi {
         billing_customer_conflict: "This organization's billing needs to be separated from a legacy account. Contact support.",
         billing_identity_conflict: "This organization's billing identity needs to be verified. Contact support.",
         billing_redirect_not_allowed: "Cloud billing return links are not configured. Contact Openship support.",
+        invalid_redirect_url: "Cloud billing requires a valid HTTPS return link. Contact Openship support.",
         billing_idempotency_conflict: "This checkout attempt no longer matches the original request. Contact Openship support before starting another payment.",
         billing_checkout_reconciliation_required: "An earlier checkout needs to be reviewed. Contact Openship support before starting another payment.",
+        checkout_expired: "This checkout has expired. Choose your plan again to start a new checkout.",
+        capacity_checkout_expired: "This checkout has expired. Choose your plan again to start a new checkout.",
         invalid_offer: "This Cloud offer is not configured correctly. Contact Openship support.",
         reseller_enterprise_required: "Cloud payments require an account configuration update by Openship. Contact Openship support.",
         billing_provider_configuration_error: "Cloud payments are not configured correctly. Contact Openship support.",
@@ -265,14 +357,31 @@ export class OblienBillingApi {
         billing_storage_unavailable: "Cloud billing is temporarily unavailable. Please try again later.",
         billing_provider_unavailable: "Cloud checkout is temporarily unavailable. Please try again later.",
         billing_provider_rejected: "Cloud checkout could not be completed. Contact Openship support.",
+        billing_quote_expired: "This price quote expired. Review a fresh quote before confirming.",
+        billing_quote_changed: "The subscription or price changed. Review a fresh quote before confirming.",
+        idempotency_conflict: "This billing attempt no longer matches its original request. Refresh its status before trying again.",
+        billing_plan_change_pending: "Finish or cancel the pending plan change first.",
+        billing_change_busy: "This plan change is still being confirmed. Refresh its status; do not start another payment.",
+        billing_change_not_cancelable: "This plan change can no longer be canceled. Refresh its status.",
+        plan_change_not_found: "This plan change was not found for the selected server.",
+        capacity_billing_unavailable: "Monthly server purchases are temporarily unavailable. Existing paid servers keep their coverage.",
+        capacity_unavailable: "This server size is temporarily unavailable. Please try again later or contact support.",
+        billing_capacity_unavailable: "This server size is temporarily unavailable. Please try again later or contact support.",
+        billing_offer_underfunded: "Cloud pricing is not configured correctly for this server. Contact Openship support.",
+        capacity_price_below_cost: "Cloud pricing is not configured correctly for this server. Contact Openship support.",
+        insufficient_redeemable_balance: "Cloud server purchases are temporarily unavailable. Contact Openship support.",
       };
       const checkoutUnavailable = path === "/billing/checkout" && providerFailure;
       const message = Object.hasOwn(known, code) ? known[code]
         : checkoutUnavailable ? "Cloud checkout is temporarily unavailable. Please try again later."
           : "Cloud billing could not complete this request. Please retry.";
       throw new OperationError(diagnostic.reference ? `${message} Reference: ${diagnostic.reference}.` : message,
-        status, checkoutUnavailable ? "OBLIEN_CHECKOUT_UNAVAILABLE" : "OBLIEN_BILLING_ERROR", {
+        status, capacityUnavailable ? "CLOUD_CAPACITY_UNAVAILABLE"
+          : checkoutUnavailable ? "OBLIEN_CHECKOUT_UNAVAILABLE" : "OBLIEN_BILLING_ERROR", {
           ...(Object.hasOwn(known, code) ? { providerCode: code } : {}),
+          ...(checkoutExpired ? { checkoutExpired: true } : {}),
+          ...(path === "/billing/checkout" && [400, 402, 403, 409, 422].includes(response.status) && REJECTED_CHECKOUT_CODES.has(code)
+            ? { checkoutRejected: true } : {}),
           ...(Object.keys(diagnostic).length ? { details: diagnostic } : {}),
         });
     }
@@ -290,6 +399,18 @@ export class OblienBillingApi {
 
   getCatalog(): Promise<OblienBillingCatalog> {
     return this.validate(this.billing.catalog(), oblienCatalogSchema);
+  }
+
+  getCapacityCatalog() {
+    return this.validate(this.billing.capacityCatalog(), oblienCapacityCatalogSchema);
+  }
+
+  /** Sales check only. Existing contracts and renewal keep their saved tariff. */
+  async assertMonthlyCapacitySupport() {
+    const catalog = await this.getCapacityCatalog();
+    if (!catalog.billingModes.includes("monthly") || !catalog.paymentSources.monthly.includes("stripe"))
+      throw new AppError("Monthly server purchases are temporarily unavailable", 503, "OBLIEN_CAPACITY_UNAVAILABLE");
+    return catalog;
   }
 
   async assertResellerSupport(): Promise<void> {
@@ -333,6 +454,8 @@ export class OblienBillingApi {
             "disputed",
             "expired",
             "failed",
+            "superseded",
+            "reversed",
           ]),
           namespaceCreditsGranted: amount.nonnegative(),
         }),
@@ -341,9 +464,35 @@ export class OblienBillingApi {
     );
   }
 
+  private async capacityCheckoutResponse(response: Promise<unknown>, slug: string) {
+    const result = await this.validate(response, z.object({
+      success: z.literal(true), namespace,
+      pendingCheckout: z.object({
+        quote: z.object({ id: z.string().min(1), namespace, paymentSource: z.enum(["wallet", "stripe"]) }),
+        checkoutId: z.string().min(1).nullable(), url: z.url().nullable(),
+      }).nullable(),
+    }), slug);
+    if (result.pendingCheckout) {
+      if (result.pendingCheckout.quote.namespace !== slug)
+        throw new AppError("Cloud billing returned a different checkout namespace", 502, "OBLIEN_BILLING_NAMESPACE_MISMATCH");
+      if (result.pendingCheckout.url) this.validateCheckoutUrl(result.pendingCheckout.url);
+    }
+    return result;
+  }
+
+  /** The capacity contract owns reservation release and payment cancellation. */
+  getPendingCapacityCheckout(slug: string) {
+    return this.capacityCheckoutResponse(this.billing.capacity(slug), slug);
+  }
+
+  cancelCapacityCheckout(slug: string, input: { quoteId: string; idempotencyKey: string }) {
+    return this.capacityCheckoutResponse(this.billing.cancelCapacityChange(slug, input), slug);
+  }
+
   getBalance(slug: string) {
     return this.validate(this.billing.balance(slug), z.object({
       success: z.literal(true), namespace, blocking: z.boolean(), balance: amount.nullable(),
+      billingMode: computeBillingModeSchema.optional(), computeCovered: z.boolean().optional(), paidThrough: date.optional(),
     }), slug);
   }
 
@@ -366,16 +515,61 @@ export class OblienBillingApi {
     }), slug);
   }
 
+  private async subscriptionResponse(response: Promise<unknown>, slug: string) {
+    const result = await this.validate(response, oblienSubscriptionSchema, slug);
+    if (result.subscription?.pendingChange) this.validatePlanChange(result.subscription.pendingChange, slug);
+    return result;
+  }
+
   getSubscription(slug: string) {
-    return this.validate(this.billing.subscription(slug), oblienSubscriptionSchema, slug);
+    return this.subscriptionResponse(this.billing.subscription(slug), slug);
   }
 
   cancelSubscription(slug: string) {
-    return this.validate(this.billing.cancelSubscription(slug), oblienSubscriptionSchema, slug);
+    return this.subscriptionResponse(this.billing.cancelSubscription(slug), slug);
   }
 
   resumeSubscription(slug: string) {
-    return this.validate(this.billing.resumeSubscription(slug), oblienSubscriptionSchema, slug);
+    return this.subscriptionResponse(this.billing.resumeSubscription(slug), slug);
+  }
+
+  async previewPlanChange(slug: string, input: OblienPlanChangeInput) {
+    const request = oblienPlanChangeInputSchema.parse(input);
+    const result = await this.validate(this.billing.previewPlanChange(slug, request), z.object({
+      success: z.literal(true), namespace, quote: oblienPlanChangeQuoteSchema,
+    }), slug);
+    if (result.quote.namespace !== slug || result.quote.billingInterval !== input.billingInterval)
+      throw new AppError("Cloud billing returned a different subscription quote", 502, "OBLIEN_BILLING_INVALID_RESPONSE");
+    return result;
+  }
+
+  private validatePlanChange(change: OblienPlanChange, slug: string) {
+    if (change.namespace !== slug)
+      throw new AppError("Cloud billing returned a different namespace", 502, "OBLIEN_BILLING_NAMESPACE_MISMATCH");
+    if (change.payment?.url) {
+      const host = new URL(change.payment.url).hostname;
+      this.validateHostedUrl(change.payment.url, host === "pay.stripe.com" ? "pay.stripe.com" : "invoice.stripe.com");
+    }
+  }
+
+  private async planChangeResponse(response: Promise<unknown>, slug: string, match: { id?: string; quoteId?: string }) {
+    const result = await this.validate(response, z.object({ success: z.literal(true), namespace, change: oblienPlanChangeSchema }), slug);
+    this.validatePlanChange(result.change, slug);
+    if ((match.id && result.change.id !== match.id) || (match.quoteId && result.change.quoteId !== match.quoteId))
+      throw new AppError("Cloud billing returned a different plan change", 502, "OBLIEN_BILLING_INVALID_RESPONSE");
+    return result;
+  }
+
+  changePlan(slug: string, input: { quoteId: string; idempotencyKey: string }) {
+    return this.planChangeResponse(this.billing.changePlan(slug, input), slug, { quoteId: input.quoteId });
+  }
+
+  getPlanChange(slug: string, changeId: string) {
+    return this.planChangeResponse(this.billing.planChange(slug, changeId), slug, { id: changeId });
+  }
+
+  cancelPlanChange(slug: string, changeId: string, idempotencyKey: string) {
+    return this.planChangeResponse(this.billing.cancelPlanChange(slug, changeId, { idempotencyKey }), slug, { id: changeId });
   }
 
   async createPortal(input: { namespace: string; returnUrl: string }) {
@@ -387,7 +581,8 @@ export class OblienBillingApi {
   async createCheckout(input: OblienCheckout) {
     // Oblien validates admin-issued codes against the authenticated reseller
     // and this saved namespace offer before creating the Stripe session.
-    const request = { ...input, allowPromotionCodes: true };
+    const parsed = oblienCheckoutInputSchema.parse(input);
+    const request = { ...parsed, allowPromotionCodes: parsed.offer?.unitAmount !== 0 };
     const result = await this.validate(this.billing.checkout(request), checkoutSchema);
     this.validateCheckoutUrl(result.url);
     return result;

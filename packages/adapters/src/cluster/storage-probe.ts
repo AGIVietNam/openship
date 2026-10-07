@@ -5,6 +5,8 @@ import { patchKubernetesObject } from "./kubernetes-mutation";
 import type { KubernetesApi, KubernetesObject } from "./kubernetes-api";
 import { runClusterJob } from "./job";
 
+const FILE_CHECK_FAILED = 65;
+
 /** A real cross-server file roundtrip, using only disposable owned resources. */
 export class StorageProbe {
   readonly namespace: string;
@@ -72,19 +74,21 @@ export class StorageProbe {
           kind: "Job",
           metadata: { name: `check-${index}`, namespace: this.namespace, labels: this.labels },
           spec: {
-            // Storage recovery can delete an unstarted pod to remount its
-            // volume. Allow bounded replacement of this disposable check,
-            // including Kubernetes' synthetic exit 137 for a deleted container
-            // that never started. Process termination counts toward the retry
-            // budget; ordinary checker errors fail immediately. Native backup
-            // and import jobs stay separate.
+            // Recovery may delete the pod during shell startup (exit 2 as well
+            // as 137/143). Only our explicit file-check exit proves a data error.
+            // Other exits consume the bounded replacement budget; none count as
+            // success. Native backup and import jobs stay separate.
             backoffLimit: 2,
             activeDeadlineSeconds: 300,
             podFailurePolicy: {
               rules: [
                 {
                   action: "FailJob",
-                  onExitCodes: { containerName: "check", operator: "NotIn", values: [0, 137, 143] },
+                  onExitCodes: {
+                    containerName: "check",
+                    operator: "In",
+                    values: [FILE_CHECK_FAILED],
+                  },
                 },
               ],
             },
@@ -108,9 +112,18 @@ export class StorageProbe {
                     command: [
                       "sh",
                       "-ec",
-                      index === 0
-                        ? 'printf "%s" "$1" > /shared/roundtrip; sync; test "$(cat /shared/roundtrip)" = "$1"; printf "Shared file written and verified\\n"'
-                        : 'test "$(cat /shared/roundtrip)" = "$1"; printf "Shared file read and verified\\n"',
+                      [
+                        `fail() { printf '%s\\n' "$1" >&2; exit ${FILE_CHECK_FAILED}; }`,
+                        ...(index === 0
+                          ? [
+                              'printf "%s" "$1" > /shared/roundtrip || fail "Cannot write the shared test file"',
+                              'sync || fail "Cannot flush the shared test file"',
+                            ]
+                          : []),
+                        'value=$(cat /shared/roundtrip) || fail "Cannot read the shared test file"',
+                        '[ "$value" = "$1" ] || fail "Shared test file contents do not match"',
+                        `printf "Shared file ${index === 0 ? "written" : "read"} and verified\\n"`,
+                      ].join("\n"),
                       "check",
                       token,
                     ],

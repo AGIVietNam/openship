@@ -7,6 +7,7 @@ import {
   normalizeBillingCreditPacks,
   parseInput,
   type BillingOperations,
+  type BillingScopeInput,
 } from "@repo/contracts";
 import { listAuthorizedProjects } from "../../lib/authorized-projects";
 import { AppError, FREE_DOMAIN_SUFFIX, cloudRuntimeTarget } from "@repo/core";
@@ -17,14 +18,17 @@ import * as billingRepository from "@repo/platform/engine/modules/billing/billin
 import { getNamespaceUsage } from "@repo/platform/engine/modules/billing/billing-oblien-quota";
 import { presentCloudPlans } from "./billing-catalog";
 import { getBillingResources } from "./billing-resources.service";
-export { getCapacity, previewCapacity, applyCapacity } from "./billing-capacity.service";
+import { customSubscriptionOffer } from "./billing-custom-offer";
+import { getOblienBillingApi } from "../../lib/oblien-client";
+export { previewSubscriptionChange, confirmSubscriptionChange, getSubscriptionChange, cancelSubscriptionChange } from "./billing-plan-change";
+export { listCheckouts, resumeCheckout, cancelCheckout } from "./billing-checkout-recovery";
 
 /* ---------- Plans (public) ---------- */
 
 /** Public on every installation: a linked local dashboard must show Cloud's
  * actual prices too. Outside SaaS, read Openship's public catalog without credentials. */
 export async function listPlans(input: NonNullable<Parameters<BillingOperations["listPlans"]>[0]>) {
-  if (env.CLOUD_MODE) return presentCloudPlans(input.locale);
+  if (env.CLOUD_MODE) return presentCloudPlans(input.locale, await getOblienBillingApi().assertMonthlyCapacitySupport());
   const url = new URL("/api/billing/plans", cloudRuntimeTarget.api);
   if (input.locale) url.searchParams.set("locale", input.locale);
   try {
@@ -47,20 +51,30 @@ export async function listPlans(input: NonNullable<Parameters<BillingOperations[
 
 /* ---------- Billing state (dashboard overview) ---------- */
 
-export async function getState(ctx: ExecutionContext) {
-  const state = await billingRepository.getBillingState(ctx.organizationId);
+export async function getState(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  const state = await billingRepository.getBillingState(ctx.organizationId, input.workspaceId);
   return state;
 }
 
-export async function getCheckout(ctx: ExecutionContext, input: { checkoutId: string }) {
-  return billingService.getCheckoutStatus(ctx.organizationId, input.checkoutId);
+export async function getCreditAlerts(ctx: ExecutionContext) {
+  return billingRepository.getCreditAlerts(ctx.organizationId);
 }
 
-export async function getResources(ctx: ExecutionContext) {
-  return getBillingResources(ctx.organizationId);
+export async function getCheckout(ctx: ExecutionContext, input: { checkoutId: string; workspaceId?: string }) {
+  return billingService.getCheckoutStatus(ctx.organizationId, input.checkoutId, input.workspaceId);
+}
+
+export async function getResources(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  return getBillingResources(ctx.organizationId, input.workspaceId);
 }
 
 /* ---------- Subscriptions ---------- */
+
+export async function quoteCustomPlan(_ctx: ExecutionContext, input: Parameters<BillingOperations["quoteCustomPlan"]>[0]) {
+  await getOblienBillingApi().assertMonthlyCapacitySupport();
+  const { quote } = customSubscriptionOffer(input);
+  return quote;
+}
 
 export async function createSubscription(ctx: ExecutionContext, input: NonNullable<Parameters<BillingOperations["createSubscription"]>[0]>) {
   const { planTierId, interval } = input;
@@ -70,18 +84,20 @@ export async function createSubscription(ctx: ExecutionContext, input: NonNullab
     planTierId,
     interval,
     input.idempotencyKey,
+    input.workspaceId,
+    input.custom,
   );
 
   return { checkoutUrl };
 }
 
-export async function cancelSubscription(ctx: ExecutionContext) {
-  const result = await billingService.cancelSubscription(ctx.organizationId);
+export async function cancelSubscription(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  const result = await billingService.cancelSubscription(ctx.organizationId, input.workspaceId);
   return result;
 }
 
-export async function resumeSubscription(ctx: ExecutionContext) {
-  return billingService.resumeSubscription(ctx.organizationId);
+export async function resumeSubscription(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  return billingService.resumeSubscription(ctx.organizationId, input.workspaceId);
 }
 
 /* ---------- Top-ups ---------- */
@@ -93,6 +109,7 @@ export async function createTopup(ctx: ExecutionContext, input: NonNullable<Para
     ctx,
     packId,
     input.idempotencyKey,
+    input.workspaceId,
   );
 
   return { checkoutUrl };
@@ -118,11 +135,11 @@ export async function listTopupPacks(_ctx: ExecutionContext) {
  *
  * Each row carries its `domainId` so a client can offer Release directly.
  */
-export async function listAllowanceDetail(ctx: ExecutionContext) {
+export async function listAllowanceDetail(ctx: ExecutionContext, input: BillingScopeInput = {}) {
 
   const [usage, slots] = await Promise.all([
-    getFreeSubdomainUsage(ctx.organizationId),
-    listFreeSubdomains(ctx.organizationId),
+    getFreeSubdomainUsage(ctx.organizationId, undefined, input.workspaceId),
+    listFreeSubdomains(ctx.organizationId, input.workspaceId),
   ]);
   const restrictedProjects = ctx.tokenScope || ctx.role === "restricted"
     ? new Set((await listAuthorizedProjects(ctx, ctx.organizationId)).map(project => project.id)) : null;
@@ -148,8 +165,8 @@ export async function listAllowanceDetail(ctx: ExecutionContext) {
 
 /* ---------- Portal ---------- */
 
-export async function createPortal(ctx: ExecutionContext) {
-  const { portalUrl } = await billingService.createPortalSession(ctx.organizationId);
+export async function createPortal(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  const { portalUrl } = await billingService.createPortalSession(ctx.organizationId, input.workspaceId);
   return { portalUrl };
 }
 
@@ -193,6 +210,7 @@ export async function getUsage(ctx: ExecutionContext, input: NonNullable<Paramet
 
   const usage = await getNamespaceUsage({
     organizationId: ctx.organizationId,
+    workspaceId: input.workspaceId,
     from,
     to,
     groupBy,
@@ -213,8 +231,8 @@ export async function getUsage(ctx: ExecutionContext, input: NonNullable<Paramet
  * `getState` so callers (and the local proxy) can poll just the
  * subscription row without re-fetching the credit balance.
  */
-export async function getSubscription(ctx: ExecutionContext) {
-  const state = await billingRepository.getBillingState(ctx.organizationId);
+export async function getSubscription(ctx: ExecutionContext, input: BillingScopeInput = {}) {
+  const state = await billingRepository.getBillingState(ctx.organizationId, input.workspaceId);
   return {
       tier: state.tier,
       status: state.status,

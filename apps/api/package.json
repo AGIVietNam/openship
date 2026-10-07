@@ -1,6 +1,6 @@
 {
   "name": "@repo/api",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -39,6 +39,7 @@
     "nodemailer": "^9.0.3",
     "pino": "^10.3.1",
     "stripe": "^20.4.0",
+    "ws": "^8.21.3",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
@@ -46,6 +47,7 @@
     "@repo/sdk": "workspace:*",
     "@types/node": "^22.13.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

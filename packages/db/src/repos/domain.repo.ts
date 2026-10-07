@@ -16,6 +16,7 @@ import {
 import { ConflictError, generateId, DOMAIN_RETRY_DELAYS_MS } from "@repo/core";
 import type { Database } from "../client";
 import { domain, orphanedResource, project, service } from "../schema";
+import { assertProjectConfigurationWritable, withProjectConfigurationWrite } from "./project-work-admission";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,8 @@ type RepoTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 // ─── Repository ──────────────────────────────────────────────────────────────
 
 export function createDomainRepo(db: Database) {
+  const ownerPredicate = (id: string) => inArray(project.id,
+    db.select({ id: domain.projectId }).from(domain).where(eq(domain.id, id)));
   // Filter before LIMIT so recent failures cannot starve older, eligible rows.
   // The same persisted counter/timestamp drives the next-check time in clients.
   function retryDue(now = new Date()) {
@@ -78,6 +81,7 @@ export function createDomainRepo(db: Database) {
     const [row] = await tx.select({ projectId: domain.projectId, hostname: domain.hostname })
       .from(domain).where(eq(domain.id, id));
     if (row?.projectId) {
+      await assertProjectConfigurationWritable(tx, eq(project.id, row.projectId));
       const [owner] = await tx.select({ compositeRoutes: project.compositeRoutes })
         .from(project).where(eq(project.id, row.projectId)).for("update");
       const routes = owner?.compositeRoutes ?? [];
@@ -103,11 +107,7 @@ export function createDomainRepo(db: Database) {
     domainId: string,
     patch: Partial<NewDomain> = {},
   ): Promise<boolean> {
-    await tx
-      .select({ id: project.id })
-      .from(project)
-      .where(eq(project.id, projectId))
-      .for("update");
+    await assertProjectConfigurationWritable(tx, or(eq(project.id, projectId), ownerPredicate(domainId))!);
 
     const [target] = await tx
       .select({ projectId: domain.projectId })
@@ -156,6 +156,7 @@ export function createDomainRepo(db: Database) {
    */
   async function insertAndRead(row: NewDomain & { id: string }): Promise<Domain> {
     await db.transaction(async (tx) => {
+      if (row.projectId) await assertProjectConfigurationWritable(tx, eq(project.id, row.projectId));
       await tx.insert(domain).values(row);
       // A force-deleted project's route orphan owns the hostname until its
       // physical vhost and managed registration are actually reclaimed. Check
@@ -337,12 +338,12 @@ export function createDomainRepo(db: Database) {
      * custom hostnames. Soft-deleted projects are excluded: their rows are
      * unreachable, and a slot that can't be used must not be charged for.
      */
-    async listHostnamesForOrg(organizationId: string): Promise<string[]> {
+    async listHostnamesForOrg(organizationId: string, workspaceId?: string | null): Promise<string[]> {
       const rows = await db
         .select({ hostname: domain.hostname })
         .from(domain)
         .innerJoin(project, eq(domain.projectId, project.id))
-        .where(and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`));
+        .where(and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`, projectWorkspaceScope(workspaceId)));
       return rows.map((r) => r.hostname);
     },
 
@@ -359,7 +360,7 @@ export function createDomainRepo(db: Database) {
      * Same join and filters as the counting query, so the list and the count can
      * never disagree about what occupies a slot.
      */
-    async listForOrgWithProject(organizationId: string): Promise<
+    async listForOrgWithProject(organizationId: string, workspaceId?: string | null): Promise<
       {
         id: string;
         hostname: string;
@@ -386,7 +387,7 @@ export function createDomainRepo(db: Database) {
         })
         .from(domain)
         .innerJoin(project, eq(domain.projectId, project.id))
-        .where(and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`))
+        .where(and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`, projectWorkspaceScope(workspaceId)))
         .orderBy(asc(project.name), asc(domain.hostname));
     },
 
@@ -406,10 +407,11 @@ export function createDomainRepo(db: Database) {
         const targetProjectId = data.projectId === undefined ? row?.projectId : data.projectId;
         if (targetProjectId && (await promotePrimary(targetProjectId, id, data))) return;
       }
-      await db
+      const predicate = or(ownerPredicate(id), data.projectId ? eq(project.id, data.projectId) : undefined)!;
+      await withProjectConfigurationWrite(db, predicate, async (tx) => tx
         .update(domain)
         .set({ ...data, updatedAt: new Date() })
-        .where(eq(domain.id, id));
+        .where(eq(domain.id, id)));
     },
 
     /** Return the primary domain for a project (or first domain, or null). */
@@ -548,7 +550,7 @@ export function createDomainRepo(db: Database) {
     },
 
     async markVerified(id: string) {
-      await db
+      await withProjectConfigurationWrite(db, ownerPredicate(id), async (tx) => tx
         .update(domain)
         .set({
           verified: true,
@@ -560,7 +562,7 @@ export function createDomainRepo(db: Database) {
           lastCheckedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(domain.id, id));
+        .where(eq(domain.id, id)));
     },
 
     /**
@@ -589,6 +591,7 @@ export function createDomainRepo(db: Database) {
     ) {
       const { promote, ...ssl } = data;
       await db.transaction(async (tx) => {
+        await assertProjectConfigurationWritable(tx, or(ownerPredicate(id), promote ? eq(project.id, promote.projectId) : undefined)!);
         const now = new Date();
         const patch: Partial<NewDomain> = {
           verified: true,
@@ -613,7 +616,7 @@ export function createDomainRepo(db: Database) {
     /** A completed failed check is failed, even while its next retry is scheduled.
      * One SQL update prevents lost counters; a stale check cannot undo success. */
     async recordVerifyFailure(id: string, error: string): Promise<number> {
-      const [row] = await db
+      const [row] = await withProjectConfigurationWrite(db, ownerPredicate(id), async (tx) => tx
         .update(domain)
         .set({
           verifyAttempts: sql`${domain.verifyAttempts} + 1`,
@@ -623,7 +626,7 @@ export function createDomainRepo(db: Database) {
           updatedAt: new Date(),
         })
         .where(and(eq(domain.id, id), eq(domain.verified, false), ne(domain.status, "removing")))
-        .returning();
+        .returning());
       return row?.verifyAttempts ?? 0;
     },
 
@@ -631,7 +634,7 @@ export function createDomainRepo(db: Database) {
      * working certificate disappeared. Only a definitive missing/invalid read
      * may replace that last known state. */
     async recordSslFailure(id: string, error: string, definitive = false) {
-      await db
+      await withProjectConfigurationWrite(db, ownerPredicate(id), async (tx) => tx
         .update(domain)
         .set({
           verifyAttempts: sql`${domain.verifyAttempts} + 1`,
@@ -643,7 +646,7 @@ export function createDomainRepo(db: Database) {
             : sql`case when ${domain.sslStatus} in ('active', 'external') then ${domain.sslStatus} else 'error' end`,
           updatedAt: new Date(),
         })
-        .where(and(eq(domain.id, id), ne(domain.status, "removing")));
+        .where(and(eq(domain.id, id), ne(domain.status, "removing"))));
     },
 
     /** `manualSsl` is declared because callers pass it (via spread, which slips
@@ -674,7 +677,7 @@ export function createDomainRepo(db: Database) {
         // A certificate read alone does not prove cloud DNS ownership. Clear
         // TLS failures for verified rows; the verification transaction clears
         // unverified rows when the ownership check itself succeeds.
-        await db
+        await withProjectConfigurationWrite(db, ownerPredicate(id), async (tx) => tx
           .update(domain)
           .set({
             ...data,
@@ -684,7 +687,7 @@ export function createDomainRepo(db: Database) {
             lastCheckedAt: sql`case when ${domain.verified} then ${now.toISOString()}::timestamp else ${domain.lastCheckedAt} end`,
             updatedAt: now,
           })
-          .where(and(eq(domain.id, id), ne(domain.status, "removing")));
+          .where(and(eq(domain.id, id), ne(domain.status, "removing"))));
         return;
       }
       await this.update(id, data);
@@ -713,6 +716,8 @@ export function createDomainRepo(db: Database) {
       servicePatch: { serviceId: string; routing: Record<string, unknown> },
     ) {
       await db.transaction(async (tx) => {
+        await assertProjectConfigurationWritable(tx, or(ownerPredicate(id), inArray(project.id,
+          tx.select({ id: service.projectId }).from(service).where(eq(service.id, servicePatch.serviceId))))!);
         await removeInTransaction(tx, id);
         await tx
           .update(service)
@@ -723,12 +728,13 @@ export function createDomainRepo(db: Database) {
 
     /** Hard-delete every domain row tied to a project. Frees managed slugs immediately on project teardown. */
     async deleteByProjectId(projectId: string) {
-      await db.delete(domain).where(eq(domain.projectId, projectId));
+      await withProjectConfigurationWrite(db, eq(project.id, projectId), async (tx) => tx.delete(domain).where(eq(domain.projectId, projectId)));
     },
 
     /** Hard-delete every domain row tied to a service. Clears derived routing rows on service teardown. */
     async deleteByServiceId(serviceId: string) {
-      await db.delete(domain).where(eq(domain.serviceId, serviceId));
+      const predicate = inArray(project.id, db.select({ id: service.projectId }).from(service).where(eq(service.id, serviceId)));
+      await withProjectConfigurationWrite(db, predicate, async (tx) => tx.delete(domain).where(eq(domain.serviceId, serviceId)));
     },
 
     /** Retry failed renewals while their existing certificate is due too.
@@ -812,3 +818,4 @@ export function createDomainRepo(db: Database) {
 
   return repository;
 }
+import { projectWorkspaceScope } from "./workspace-scope";

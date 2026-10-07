@@ -6,8 +6,9 @@ import React from "react";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 
 /**
- * Renders the `details` payload of a pipeline prompt. Two shapes:
+ * Renders the `details` payload of a pipeline prompt:
  *
+ *  - pre-deploy backup → failed sources and their errors.
  *  - port conflict → a port/PID/systemd-unit key list (a service already on the port).
  *  - edge conflict → the sites parsed from an existing reverse proxy on 80/443, so the
  *    operator can AUDIT exactly what a "migrate & take over" would import (and, via the
@@ -72,6 +73,21 @@ export const PromptDetails: React.FC<{ details?: Record<string, unknown> }> = ({
   const dp = t.importProject.deploymentProcessing;
 
   if (!details) return null;
+
+  const backupErrors = Array.isArray(details.backupErrors)
+    ? details.backupErrors.filter((error): error is string => typeof error === "string")
+    : [];
+  if (backupErrors.length > 0) {
+    return (
+      <ul className="max-h-40 space-y-2 overflow-y-auto rounded-xl bg-muted/40 p-3">
+        {backupErrors.map((error, index) => (
+          <li key={index} className="break-words text-sm text-muted-foreground">
+            {error}
+          </li>
+        ))}
+      </ul>
+    );
+  }
 
   const occupants = asOccupants(details);
   const sites = asEdgeSites(details);

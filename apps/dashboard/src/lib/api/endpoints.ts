@@ -466,6 +466,9 @@ export const endpoints = {
   /*  Docker migration (inspect + adopt an existing Docker server)    */
   /* ---------------------------------------------------------------- */
   dockerMigration: {
+    sources: "migration/sources",
+    testSource: "migration/sources/test",
+    source: (id: string) => `migration/sources/${encodeURIComponent(id)}`,
     scan: "migration/scan",
     scanStream: "migration/scan/stream",
     revealEnv: "migration/reveal-env",
@@ -597,14 +600,19 @@ export const endpoints = {
   /*  Billing (Oblien-managed — SaaS + local proxy)                  */
   /* ---------------------------------------------------------------- */
   billing: {
+    checkouts: "billing/checkouts",
+    checkoutResume: "billing/checkout/resume",
+    checkoutCancel: "billing/checkout/cancel",
+    changePreview: "billing/subscription/change/preview",
+    change: "billing/subscription/change",
+    changeCancel: "billing/subscription/change/cancel",
+    customQuote: "billing/subscription/quote",
     checkout: "billing/checkout",
     plans: "billing/plans",
     state: "billing/state",
+    creditAlerts: "billing/credit-alerts",
     usage: "billing/usage",
     resources: "billing/resources",
-    capacity: "billing/capacity",
-    capacityPreview: "billing/capacity/preview",
-    capacityApply: "billing/capacity/apply",
     topupPacks: "billing/topup-packs",
     subscription: "billing/subscription",
     cancel: "billing/cancel",

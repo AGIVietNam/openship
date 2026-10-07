@@ -49,6 +49,7 @@ import { describeDockerE2E, requireDocker } from "../helpers/docker-e2e";
 const REGISTRY = process.env.OPENSHIP_E2E_IMAGE_REGISTRY ?? "ghcr.io/oblien";
 const PROJECT = `openship-e2e-update-${process.pid}`;
 const SEED_ID = "e2e-upgrade-seed";
+const SEED_SERVER_HOST = "192.0.2.1";
 const SEEDED_TABLES = ["organization", "project", "deployment", "servers"];
 
 /** Long enough for a cold pull + initdb + the whole migration chain on a CI runner. */
@@ -291,7 +292,9 @@ function appliedMigrations(): number {
  * Insert one row into `table`, with the INSERT built from the schema AS THE OLD RELEASE
  * LEFT IT. Introspection rather than a column list, for the same reason as the
  * migrate-chain suite: the old side moves every release, and a hardcoded list would
- * break on the first migration that touched any of these tables.
+ * break on the first migration that touched any of these tables. Keep a valid SSH
+ * host even when that column is nullable: managed servers made it conditional on
+ * workspace ownership, not optional for an ordinary server.
  */
 function seedRow(table: string): void {
   psql(`
@@ -303,6 +306,7 @@ function seedRow(table: string): void {
              string_agg(
                CASE
                  WHEN column_name = 'id' THEN quote_literal('${SEED_ID}')
+                 WHEN '${table}' = 'servers' AND column_name = 'ssh_host' THEN quote_literal('${SEED_SERVER_HOST}')
                  WHEN data_type IN ('text','character varying','character') THEN quote_literal('seed')
                  WHEN data_type = 'uuid' THEN quote_literal('00000000-0000-0000-0000-000000000001')
                  WHEN data_type LIKE 'timestamp%' OR data_type = 'date' THEN 'now()'
@@ -319,7 +323,9 @@ function seedRow(table: string): void {
          AND is_generated = 'NEVER'
          AND identity_generation IS NULL
          -- id is forced in even when it has a default: the assertions find the row by it.
-         AND (column_name = 'id' OR (is_nullable = 'NO' AND column_default IS NULL));
+         AND (column_name = 'id'
+           OR ('${table}' = 'servers' AND column_name = 'ssh_host')
+           OR (is_nullable = 'NO' AND column_default IS NULL));
       EXECUTE format('INSERT INTO %I (%s) VALUES (%s)', '${table}', cols, vals);
     END
     $seed$;
@@ -412,6 +418,7 @@ describeDockerE2E("update from the previous release", () => {
     for (const table of SEEDED_TABLES) {
       expect(rowCount(table), `${table} was not seeded on ${oldVersion}`).toBe(1);
     }
+    expect(psql(`select ssh_host from servers where id = '${SEED_ID}'`)).toBe(SEED_SERVER_HOST);
   });
 
   it("recreates onto this release's image and comes up healthy, with the data intact", async () => {
@@ -428,6 +435,7 @@ describeDockerE2E("update from the previous release", () => {
     for (const table of SEEDED_TABLES) {
       expect(rowCount(table), `${table} lost its row across the update`).toBe(1);
     }
+    expect(psql(`select ssh_host from servers where id = '${SEED_ID}'`)).toBe(SEED_SERVER_HOST);
 
     // Healthy is not enough: `restart: unless-stopped` will bounce a container until
     // something works, so a crash loop that eventually succeeded still looks healthy

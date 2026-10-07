@@ -168,12 +168,12 @@ function startingRuntime() {
 }
 
 it("deploys Cloud Compose endpoints, internal paths, generated files and container identities through one workspace", async () => {
-  const { CloudDockerRuntime } = await import("@repo/adapters");
+  const { CloudDockerRuntime, CloudInfraProvider } = await import("@repo/adapters");
   const configurations: Array<Record<string, any>> = [];
   const publishRoute = vi.fn(async () => undefined);
   const pullImage = vi.fn(async () => undefined);
   const runtime = Object.assign(Object.create(CloudDockerRuntime.prototype), {
-    name: "cloud", workspaceId: "shared-vm", projectId: "p1", unsupportedComposeKeys: new Set(),
+    name: "docker", workspaceId: "shared-vm", projectId: "p1", unsupportedComposeKeys: new Set(),
     supports: (cap: string) => cap === "dockerHost",
     ensureServiceGroup: vi.fn(async () => ({ id: "shared-network", kind: "docker-network" })),
     deployServiceWorkload: vi.fn(async (_group: unknown, config: Record<string, any>) => {
@@ -186,6 +186,9 @@ it("deploys Cloud Compose endpoints, internal paths, generated files and contain
     getContainerIp: vi.fn(async () => "172.18.0.2"), listAllContainers: vi.fn(async () => []),
     destroy: vi.fn(async () => undefined), publishRoute, pullImage,
   }) as CloudDockerRuntime;
+  const routing = Object.assign(Object.create(CloudInfraProvider.prototype), {
+    publishRoute, resolveRoutingTarget: runtime.resolveRoutingTarget,
+  });
   const executor = {
     exec: vi.fn(async () => ""), mkdir: vi.fn(async () => undefined), rm: vi.fn(async () => undefined),
     rename: vi.fn(async () => undefined), writeFile: vi.fn(async () => undefined),
@@ -203,13 +206,13 @@ it("deploys Cloud Compose endpoints, internal paths, generated files and contain
     return row;
   });
   const { logger } = recordingLogger();
-  const result = await deployComposeServices({ ...project, cloudWorkspaceId: "shared-vm", routeStrategy: "auto",
+  const result = await deployComposeServices({ ...project, workspaceId: "shared-vm", routeStrategy: "auto",
     compositeRoutes: [{ hostname: "app.opsh.io", isCustomDomain: false, rootServiceId: "svc-web",
       locations: [{ pathPrefix: "/api/", serviceId: "svc-api" }] }] } as Project,
-  { ...dep, projectId: "p1", meta: { deployTarget: "cloud", runtimeMode: "docker", cloudDockerWorkspace: { projectId: "p1", workspaceId: "shared-vm" } } },
+  { ...dep, projectId: "p1", meta: { deployTarget: "cloud", runtimeMode: "docker", managedServer: { projectId: "p1", workspaceId: "shared-vm", ownerWorkspaceId: "subscribed-server" } } },
   runtime, logger, { executor, localHost: false, usesManagedRouting: false, forcePullImages: true,
     resources: { cpuCores: 1, memoryMb: 1024, diskMb: 8192 },
-    routing: { removeRoute: vi.fn(), registerRoute: vi.fn() } as never, ssl: { provisionCert: vi.fn(), verifyCert: vi.fn() } as never });
+    routing, ssl: { provisionCert: vi.fn(), verifyCert: vi.fn() } as never });
   expect(result.status).toBe("ready");
   expect(result.routeWarnings ?? []).toEqual([]);
   expect(configurations.find(config => config.serviceName === "web")?.cloudEndpoints).toEqual([
@@ -1171,7 +1174,7 @@ describe("compose deploy — host channel unavailable", () => {
     ]);
   });
 
-  it("pre-pulls the entire selected image cohort before touching any running service", async () => {
+  it.each(["webhook", "update"])("%s pre-pulls the selected image cohort before touching any running service", async (trigger) => {
     const { DockerRuntime } = await import("@repo/adapters");
     const runtime = await DockerRuntime.create({
       dockerSocketPath: "/tmp/openship-test-absent.sock",
@@ -1219,19 +1222,23 @@ describe("compose deploy — host channel unavailable", () => {
         image: "ghcr.io/acme/worker:staging",
         exposed: false,
       },
+      {
+        id: "svc-local", projectId: "p1", name: "local-app", enabled: true,
+        dependsOn: [], advanced: null, ports: [], image: "my-private-app:local", exposed: false,
+      },
     ];
 
     const { logger } = recordingLogger();
     await expect(
       deployComposeServices(
         { ...project, activeDeploymentId: "d-old", routeStrategy: "container-ip" } as never,
-        dep,
+        { ...dep, trigger },
         runtime,
         logger,
         {
           targetServiceIds: new Set(["svc-api", "svc-worker"]),
           strictScope: true,
-          forcePullImages: true,
+          forcePullImages: trigger === "webhook",
         },
       ),
     ).rejects.toThrow("registry unavailable");
@@ -1240,8 +1247,58 @@ describe("compose deploy — host channel unavailable", () => {
     expect(pullImage).toHaveBeenNthCalledWith(2, "ghcr.io/acme/worker:staging", { force: true });
     expect(pullImage).toHaveBeenCalledTimes(2);
     expect(pullImage).not.toHaveBeenCalledWith("postgres:17", expect.anything());
+    expect(pullImage).not.toHaveBeenCalledWith("my-private-app:local", expect.anything());
     expect(deployServiceWorkload).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("updates a selected image while carrying the untouched local service into the new deployment", async () => {
+    const { DockerRuntime } = await import("@repo/adapters");
+    const pullImage = vi.fn(async () => undefined);
+    const deployServiceWorkload = vi.fn(async () => ({
+      status: "running", containerId: "container-new-api", ip: "172.18.0.3",
+    }));
+    const runtime = Object.assign(Object.create(DockerRuntime.prototype), {
+      name: "docker", unsupportedComposeKeys: new Set(),
+      supports: (cap: string) => cap === "containerIp" || cap === "containerInfo",
+      ensureServiceGroup: vi.fn(async () => ({ id: "group-1" })),
+      getContainerInfo: vi.fn(async (id: string) => ({
+        containerId: id, status: "running", ip: "172.18.0.2",
+      })),
+      getContainerIp: vi.fn(async () => "172.18.0.3"),
+      destroy: vi.fn(async () => undefined),
+      pullImage, deployServiceWorkload,
+    }) as DockerRuntime;
+    h.services = [
+      { id: "svc-local", projectId: "p1", name: "local-app", image: "my-app:custom",
+        enabled: true, dependsOn: [], advanced: null, ports: [], exposed: false },
+      { id: "svc-api", projectId: "p1", name: "api", image: "ghcr.io/acme/api:stable",
+        enabled: true, dependsOn: [], advanced: null, ports: [], exposed: false },
+    ];
+    h.previousServiceRows = [{
+      id: "sd-local", deploymentId: "d-old", serviceId: "svc-local", serviceName: "local-app",
+      containerId: "container-local", status: "success", imageRef: "my-app:custom", imageDigest: null,
+      ip: "172.18.0.2",
+    }];
+    const { logger } = recordingLogger();
+    const result = await deployComposeServices(
+      { ...project, activeDeploymentId: "d-old", routeStrategy: "container-ip" } as Project,
+      { ...dep, trigger: "update" }, runtime, logger,
+      { targetServiceIds: new Set(["svc-api"]), strictScope: true },
+    );
+    expect(result.status).toBe("ready");
+    expect(pullImage).toHaveBeenCalledExactlyOnceWith("ghcr.io/acme/api:stable", { force: true });
+    expect(deployServiceWorkload).toHaveBeenCalledOnce();
+    expect(deployServiceWorkload).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      serviceName: "api", forcePull: false,
+    }), expect.anything());
+    expect(result.services).toContainEqual(expect.objectContaining({
+      serviceId: "svc-local", containerId: "container-local", carried: true,
+    }));
+    expect(h.upsertServiceDeployment).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: "svc-local", containerId: "container-local", imageRef: "my-app:custom",
+    }));
+    expect(runtime.destroy).not.toHaveBeenCalledWith("container-local");
   });
 
   it("does not try to pull a static sub-app's host artifact as a Docker image", async () => {
@@ -1516,11 +1573,11 @@ describe("compose deploy — host channel unavailable", () => {
     expect(lines.some((l) => l.message.includes("Host operations are unavailable"))).toBe(false);
   });
 
-  it("stays quiet on cloud, which has no executor and no host", async () => {
+  it("refuses a routed Docker deployment without its target executor", async () => {
     const { logger, lines } = recordingLogger();
     await expect(
-      deployComposeServices(project, dep, haltingRuntime("cloud"), logger, { executor: null }),
-    ).rejects.toThrow(/halt/);
+      deployComposeServices(project, dep, haltingRuntime("docker", false), logger, { executor: null }),
+    ).rejects.toThrow("physical target executor");
     expect(lines.some((l) => l.message.includes("Host operations are unavailable"))).toBe(false);
   });
 

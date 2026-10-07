@@ -16,14 +16,14 @@ import { SCOPE_ORDER } from "./issueMeta";
  */
 export function IssueList({
   issues,
-  busyId,
+  busyIds,
   onResolve,
   onInfraFix,
   onRecheck,
   rechecking,
 }: {
   issues: SystemIssue[];
-  busyId: string | null;
+  busyIds: ReadonlySet<string>;
   onResolve: (issue: SystemIssue) => void;
   onInfraFix: (issue: SystemIssue) => void;
   onRecheck?: () => void;
@@ -63,7 +63,7 @@ export function IssueList({
           scope={scope}
           issues={rows}
           standAlone={advisoriesStandAlone}
-          busyId={busyId}
+          busyIds={busyIds}
           onResolve={onResolve}
           onInfraFix={onInfraFix}
           onRecheck={onRecheck}

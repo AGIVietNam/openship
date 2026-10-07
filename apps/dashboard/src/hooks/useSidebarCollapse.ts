@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 /** Keep the normal sidebar preference separate from each section's temporary override. */
-export function useSidebarCollapse(autoCollapseScope: string | null) {
+export function useSidebarCollapse(autoCollapseScope: string | null, autoCollapse = true) {
   const [state, setState] = useState({
     autoCollapseScope,
     preferredCollapsed: false,
@@ -16,11 +16,16 @@ export function useSidebarCollapse(autoCollapseScope: string | null) {
   }
 
   const collapsed =
-    autoCollapseScope !== null ? (state.override ?? true) : state.preferredCollapsed;
+    autoCollapseScope !== null
+      ? (state.override ?? (autoCollapse || state.preferredCollapsed))
+      : state.preferredCollapsed;
   const toggleCollapsed = () => {
     setState((current) =>
       autoCollapseScope !== null
-        ? { ...current, override: !(current.override ?? true) }
+        ? {
+            ...current,
+            override: !(current.override ?? (autoCollapse || current.preferredCollapsed)),
+          }
         : { ...current, preferredCollapsed: !current.preferredCollapsed },
     );
   };

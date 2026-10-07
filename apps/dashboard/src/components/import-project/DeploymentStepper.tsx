@@ -57,18 +57,18 @@ export function DeploymentStepper() {
               {/* An opaque ring cuts the track away from the icon in every theme. */}
               <span
                 aria-hidden="true"
-                className={`relative z-10 inline-flex size-6 shrink-0 items-center justify-center rounded-full ring-2 ring-[var(--th-card-on-page)] ${tone}`}
+                className={`relative z-10 inline-flex size-8 shrink-0 items-center justify-center rounded-full ring-4 ring-[var(--th-card-on-page)] ${tone}`}
               >
                 {completed ? (
-                  <UiIcon name="check" className="size-3.5" />
+                  <UiIcon name="check" className="size-5" />
                 ) : failed ? (
-                  <UiIcon name="close" className="size-3.5" />
+                  <UiIcon name="close" className="size-5" />
                 ) : cancelled ? (
-                  <UiIcon name="minus" className="size-3.5" />
+                  <UiIcon name="minus" className="size-5" />
                 ) : active ? (
-                  <UiIcon name="spinner" className="size-3.5 motion-safe:animate-spin" />
+                  <UiIcon name="spinner" className="size-5 motion-safe:animate-spin" />
                 ) : (
-                  <UiIcon name={step.icon} className="size-3.5" />
+                  <UiIcon name={step.icon} className="size-4.5" />
                 )}
               </span>
             </li>

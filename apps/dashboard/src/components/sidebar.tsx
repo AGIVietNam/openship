@@ -19,8 +19,9 @@ import { useMailScope } from "@/context/MailScopeContext";
 import { setActiveOrganizationId } from "@/lib/api/client";
 import { projectsApi } from "@/lib/api";
 import { useSidebarCollapse } from "@/hooks/useSidebarCollapse";
+import { useSidebarLayout } from "@/context/SidebarLayoutContext";
 import { useIssueCounts } from "@/hooks/useIssueCounts";
-import { getSidebarNavCountsRevision, subscribeSidebarNavCounts } from "@/lib/sidebar-nav-counts";
+import { countProjectCollections, getSidebarNavCountsRevision, subscribeSidebarNavCounts } from "@/lib/sidebar-nav-counts";
 import {
   getMailNavSections,
   getNavSections,
@@ -92,7 +93,11 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
   const displayEmail = user?.email || (isDesktop ? "Desktop" : "");
   const cloudBadge = cloudConnected ? cloudUser : null;
   const displayInitial = displayName?.[0] ?? displayEmail?.[0] ?? "?";
-  const isSaaS = !selfHosted || cloudConnected;
+  const isSaaS = (!selfHosted && !isDesktop) || cloudConnected;
+  const [navCounts, setNavCounts] = useState<ReturnType<typeof countProjectCollections> | null>(
+    null,
+  );
+  const supportAvailable = isSaaS || !!navCounts?.hasCloudProjects;
   const mailView = productView === "mail";
   const mailScope = useMailScope();
   const navSections = mailView
@@ -102,24 +107,28 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
         activeServerId: mailScope.activeServerId,
         activeCompleted: !!mailScope.activeServer?.completed,
         selfHosted,
+        supportAvailable,
       })
-    : getNavSections(isSaaS, selfHosted);
+    : getNavSections(isSaaS, selfHosted, supportAvailable);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { toggle } = useTheme();
   const { t } = useI18n();
   const brand = useBrandName();
-  const { collapsed: desktopCollapsed, toggleCollapsed } = useSidebarCollapse(
+  const { autoCollapse } = useSidebarLayout();
+  const collapseScope =
     pathname === "/scale" || pathname.startsWith("/scale/")
       ? "scale"
       : pathname === "/billing/plans"
         ? "plans"
-        : null,
+        : null;
+  const { collapsed: desktopCollapsed, toggleCollapsed } = useSidebarCollapse(
+    collapseScope,
+    collapseScope === "scale" || autoCollapse,
   );
   const collapsed = !mobileOpen && desktopCollapsed;
   const [loggingOut, setLoggingOut] = useState(false);
-  const [navCounts, setNavCounts] = useState<number | null>(null);
   const [navCountsRevision, setNavCountsRevision] = useState(getSidebarNavCountsRevision);
 
   useEffect(
@@ -147,7 +156,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
     // Match Home's Needs attention card; available updates are advisories.
     if (key === "issues")
       return issueCounts ? issueCounts.outage + issueCounts.actionRequired : null;
-    if (key === "projects") return navCounts;
+    if (key === "projects" || key === "apps") return navCounts?.[key] ?? null;
     return null;
   };
 
@@ -200,9 +209,8 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
     };
   }, [user?.id]);
 
-  // Nav counts — total projects from the same `projects/home` payload
-  // both pages load. Apps are included in this count (they're projects with
-  // `isApp`), so the Projects nav count shows the real total.
+  // Both collections come from the same home payload. Keep their counts separate
+  // and retain app ids so their shared project detail route highlights Apps.
   //
   // Gated on `orgsLoaded`: the count fetch must run under the resolved active
   // org (the org effect above sets `setActiveOrganizationId` a round-trip
@@ -211,21 +219,12 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
   useEffect(() => {
     if (!orgsLoaded) return;
     let cancelled = false;
+    setNavCounts(null);
     projectsApi
       .getHome()
       .then((res) => {
         if (cancelled || !res?.success || !Array.isArray(res.projects)) return;
-        // Distinct by id — the payload merges local + cloud, which can list the
-        // same project twice; a dupe must not inflate the tally.
-        const seen = new Set<string>();
-        let count = 0;
-        for (const p of res.projects) {
-          const id = p?.id;
-          if (id && seen.has(id)) continue;
-          if (id) seen.add(id);
-          count += 1;
-        }
-        setNavCounts(count);
+        setNavCounts(countProjectCollections(res.projects));
       })
       .catch(() => {
         /* counts are optional chrome — silent on failure */
@@ -276,6 +275,9 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
   // `?tab=` is only meaningful for the mail rail's entries, which all share the
   // /emails route; every other item still matches by path (see isNavItemActive).
   const currentTab = searchParams.get("tab");
+  const navPathname = pathname.startsWith("/projects/") && navCounts?.appIds.has(pathname.split("/")[2] ?? "")
+    ? "/apps"
+    : pathname;
 
   const label = (key: string, source?: "nav" | "mailTab") =>
     source === "mailTab"
@@ -362,7 +364,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: { mobileOpen?: bo
               <div className="space-y-1">
                 {items.map((item) => {
                   const { key, href, icon: Icon, labelSource } = item;
-                  const active = isNavItemActive(item, pathname, currentTab);
+                  const active = isNavItemActive(item, navPathname, currentTab);
                   const count = countFor(key);
                   const issueLabel =
                     key === "issues" && count != null && count > 0

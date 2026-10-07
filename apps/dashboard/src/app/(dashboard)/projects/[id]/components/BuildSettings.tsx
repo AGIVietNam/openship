@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { isServicesFramework } from "@repo/core";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { workloadOf } from "@/context/deployment/types";
-import { useI18n, interpolate } from "@/components/i18n-provider";
+import { useI18n } from "@/components/i18n-provider";
 import { encodeLocalSlug, encodeRepoSlug } from "@/utils/repoSlug";
 import { EnvVarsEditor } from "./EnvVarsEditor";
 import { StorageSettings } from "./StorageSettings";
@@ -91,15 +91,15 @@ export const BuildSettings = () => {
 
   const isWebmail = projectData?.framework === "webmail";
   const services = servicesData.services;
-  const monorepoCount = services.filter((s) => s.kind === "monorepo").length;
-  const composeCount = services.length - monorepoCount;
   // SERVICE-FIRST = the project itself is a set of services (a compose-stack
   // project) or a monorepo of sub-apps — its config genuinely lives per-service.
   // A single/static APP that merely had a sidecar service ADDED is NOT
   // service-first: it keeps its own primary-app Configuration below. Keyed on
   // the project's framework, never on "a service row exists" (which conflates
   // the two — the whole point of this fix).
-  const isServiceFirst = monorepoCount > 0 || isServicesFramework(projectData?.framework);
+  const isServiceFirst =
+    services.some((service) => service.kind === "monorepo") ||
+    isServicesFramework(projectData?.framework);
 
   // Edit = the deploy wizard, rehydrated from this project. The single place
   // config is editable; this tab never mutates it.
@@ -144,39 +144,10 @@ export const BuildSettings = () => {
   //    (A single/static app with an added sidecar service falls through to the
   //    single-app config below — it is NOT service-first.) ──
   if (isServiceFirst) {
-    const subAppsLabel = interpolate(
-      monorepoCount === 1 ? t.projectSettings.build.services.subAppOne : t.projectSettings.build.services.subAppOther,
-      { count: String(monorepoCount) },
-    );
-    const composeLabel = interpolate(
-      composeCount === 1 ? t.projectSettings.build.services.composeOne : t.projectSettings.build.services.composeOther,
-      { count: String(composeCount) },
-    );
-    const serviceLabel =
-      monorepoCount && composeCount
-        ? interpolate(t.projectSettings.build.services.both, { subApps: subAppsLabel, composeServices: composeLabel })
-        : monorepoCount
-          ? subAppsLabel
-          : composeLabel;
     return (
       <div className="space-y-5">
-        <SectionCard
-          icon={"layers"}
-          iconTone="primary"
-          title={t.projectSettings.build.services.title}
-          description={interpolate(t.projectSettings.build.services.descriptionTemplate, { serviceLabel })}
-          actions={
-            <button
-              type="button"
-              onClick={() => router.push(`/projects/${id}/services`)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              {t.projectSettings.build.services.open}
-              <UiIcon name="arrow-right" className="size-3.5" />
-            </button>
-          }
-        />
         <ProjectEnvironmentSettings />
+        <ResourceSettings />
       </div>
     );
   }
@@ -237,18 +208,15 @@ export const BuildSettings = () => {
         </div>
       </SectionCard>
 
-      {/* Machine power — cpu/memory caps. Editable in place, like Storage: you
-          reach for it BECAUSE a container just got OOM-killed, and routing that
-          through the full re-deploy wizard is the wrong shape. Only meaningful
-          for a project that actually runs a container. */}
-      {workload !== "static" && <ResourceSettings />}
+      <ProjectEnvironmentSettings />
+
+      {/* Project-wide limits also apply to companion services on a static site. */}
+      {(workload !== "static" || services.length > 0) && <ResourceSettings />}
 
       {/* Storage — persistent paths + object storage. Editable in place (see the
           component's own note on why it doesn't route through the wizard). Only
           meaningful for a project with a running container. */}
       {workload !== "static" && <StorageSettings />}
-
-      <ProjectEnvironmentSettings />
     </div>
   );
 };

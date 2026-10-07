@@ -79,6 +79,20 @@ async function publishedPort(runtime: DockerRuntime, containerId: string): Promi
   return port;
 }
 
+async function restoreFailure(message: string, deploymentId?: string): Promise<Error> {
+  if (!deploymentId) return new Error(message);
+  const { getSession } = await import("@repo/platform/engine/modules/deployments/session-manager");
+  const live = getSession(deploymentId);
+  const saved = await repos.deployment.findBuildSessionByDeploymentId(deploymentId);
+  const logs = live?.logs ?? (saved?.logs as Array<{ message: string }> | null) ?? [];
+  const prompt = live?.currentPrompt;
+  return new Error(
+    `${message} (${deploymentId})\n` +
+      (prompt ? `Pending prompt: ${prompt.title}: ${prompt.message}\n` : "") +
+      logs.slice(-40).map((entry) => entry.message).join(""),
+  );
+}
+
 /** The deploy runs in the background (kickoffBuild fires and forgets), so wait
  *  for the row the restore created to reach a terminal status. */
 async function waitForRestore(
@@ -94,11 +108,13 @@ async function waitForRestore(
 }> {
   const deadline = Date.now() + timeoutMs;
   let last = "";
+  let lastId: string | undefined;
   while (Date.now() < deadline) {
     const { rows } = await repos.deployment.listByProject(projectId, { perPage: 50 });
     const fresh = rows.find((r) => !knownIds.has(r.id));
     if (fresh) {
       last = fresh.status;
+      lastId = fresh.id;
       if (["ready", "partial_failure", "failed", "cancelled"].includes(fresh.status)) {
         // `ready` means traffic may flow; the build worker can still be finishing
         // lifecycle cleanup. A following rollback must wait for the stronger
@@ -113,14 +129,17 @@ async function waitForRestore(
             }
             await new Promise((r) => setTimeout(r, 100));
           }
-          if (!quiescent) throw new Error(`restore ${fresh.id} became ready but never quiesced`);
+          if (!quiescent)
+            throw await restoreFailure("Restore became ready but never quiesced", fresh.id);
         }
         return fresh as never;
       }
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`restore never finished (last status: ${last || "no new row"})`);
+  throw await restoreFailure(
+    `Restore never finished (last status: ${last || "no new row"})`, lastId,
+  );
 }
 
 describeDockerE2E("full rollback cycle through the real entry point", () => {
@@ -206,7 +225,9 @@ describeDockerE2E("full rollback cycle through the real entry point", () => {
       },
       effectiveTarget: "local" as const,
       runtimeMode: "docker" as const,
-      usesManagedRouting: false,
+      // Keep the real self-hosted loopback routing policy. The providers are
+      // no-ops, but port reservation and ownership still run through production.
+      usesManagedRouting: true,
       serverId: null,
       // Match the real local resolver: host-port allocation is serialized by
       // the physical bind namespace, not by a nullable server-row id.

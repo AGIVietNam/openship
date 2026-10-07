@@ -92,7 +92,7 @@ export class OpenshipClient {
   constructor(options: OpenshipClientOptions) {
     this.options = Object.freeze({ ...options });
     const http = this.http = new HttpClient(options);
-    this.projects = createRemoteProjectOperations(http);
+    this.projects = createRemoteProjectOperations(http, options.fetch);
     this.sources = createRemoteSourceOperations(http);
     this.services = createRemoteServiceOperations(http);
     this.domains = createRemoteDomainOperations(http);

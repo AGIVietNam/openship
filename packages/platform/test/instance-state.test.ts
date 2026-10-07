@@ -47,6 +47,32 @@ describe("instance-owned deployment state", () => {
       await expect(sessions.promptUser("dep", { promptId: "p", title: "T", message: "M", actions: [{ id: "yes", label: "Yes" }] })).resolves.toBe("yes");
     } finally { sessions.close(); }
   });
+
+  it("rejects a stale backup choice without resolving the next retry's prompt", async () => {
+    const sessions = createSessionManager();
+    const prompt = (attempt: number) => ({
+      promptId: `backup:${attempt}`,
+      title: "Backup failed",
+      message: "Choose",
+      actions: [
+        { id: `retry:${attempt}`, label: "Retry backup" },
+        { id: `skip:${attempt}`, label: "Continue without backup" },
+      ],
+    });
+    try {
+      sessions.createSession("dep", "project");
+      const first = sessions.promptUser("dep", prompt(1));
+      expect(sessions.respondToPrompt("dep", "retry:1")).toBe(true);
+      await expect(first).resolves.toBe("retry:1");
+      const second = sessions.promptUser("dep", prompt(2));
+      expect(sessions.respondToPrompt("dep", "skip:1")).toBe(false);
+      expect(sessions.getSession("dep")?.currentPrompt?.promptId).toBe("backup:2");
+      expect(sessions.respondToPrompt("dep", "skip:2")).toBe(true);
+      await expect(second).resolves.toBe("skip:2");
+    } finally {
+      sessions.close();
+    }
+  });
 });
 
 describe("instance-owned secrets", () => {

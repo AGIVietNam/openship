@@ -1,6 +1,8 @@
 import { createClusterStorageRepo } from "./cluster-storage.repo";
 import { createCloudAnalyticsRepo } from "./cloud-analytics.repo";
 import { createCloudSupportRepo } from "./cloud-support.repo";
+import { createCloudWorkspaceRepo } from "./cloud-workspace.repo";
+export { createCloudWorkspaceRepo, type CloudWorkspace } from "./cloud-workspace.repo";
 export { createCloudSupportRepo, type CloudSupportRepo, type CloudSupportTicket, type CloudSupportMessage } from "./cloud-support.repo";
 export { createCloudAnalyticsRepo, type CloudAnalyticsRepo, type CloudAnalyticsOutboxInput, type CloudAnalyticsOutboxEvent, type CloudAnalyticsCheckout } from "./cloud-analytics.repo";
 export { createClusterStorageRepo, type ClusterStorageRecord } from "./cluster-storage.repo";
@@ -117,6 +119,7 @@ export {
 export {
   createServiceRepo,
   normalizeRoutingFields,
+  normalizeComposeRoutingFields,
   toComposeSpec,
   composeSpecsEqual,
   reconcileComposeSpec,
@@ -137,7 +140,7 @@ export {
   type InstanceSettings,
   type NewInstanceSettings,
 } from "./instance-settings.repo";
-export { createServerRepo, type Server, type NewServer } from "./server.repo";
+export { createServerRepo, type Server, type ConnectedServer, type NewServer } from "./server.repo";
 export {
   createServerClusterRepo,
   type ServerClusterRecord,
@@ -401,6 +404,7 @@ export function createRepositories(db: Database, encryption: ConfigurationEncryp
     serviceIncident: createServiceIncidentRepo(db),
     cloudWebhookBinding: createCloudWebhookBindingRepo(db),
     cloudDockerWorkspace: createCloudDockerWorkspaceRepo(db),
+    cloudWorkspace: createCloudWorkspaceRepo(db),
     projectConnection: createProjectConnectionRepo(db),
     customAppTemplate: createCustomAppTemplateRepo(db),
     webhookDelivery: createWebhookDeliveryRepo(db),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolvePlan, type PlanTierId } from "@repo/core";
-import { additionalPlanFeatures, planCapacity } from "./plan-presentation";
+import { planCapacity, serverPlanChoices } from "./plan-presentation";
 import type { ApiPlan } from "./PricingCards";
 
 function plan(id: PlanTierId = "pro", locale: "en" | "ar" = "en"): ApiPlan {
@@ -16,58 +16,70 @@ function plan(id: PlanTierId = "pro", locale: "en" | "ar" = "en"): ApiPlan {
 }
 
 describe("plan presentation", () => {
-  it.each(["en", "ar"] as const)(
-    "separates resource facts from visible benefits in %s",
-    (locale) => {
-      const offer = plan("pro", locale);
-      const benefits = additionalPlanFeatures(offer, locale);
-      expect(benefits).toEqual([offer.features[offer.featureKeys!.indexOf("prioritySupport")]!]);
-    },
-  );
-
-  it.each(["en", "ar"] as const)(
-    "recognizes the unchanged %s catalog from an older API without guessing changed copy",
-    (locale) => {
-      const offer = plan("pro", locale);
-      expect(additionalPlanFeatures({ ...offer, featureKeys: undefined }, locale)).toEqual(
-        additionalPlanFeatures(offer, locale),
-      );
-      const changed = {
-        ...offer,
-        featureKeys: undefined,
-        features: offer.features.map((feature, index) =>
-          index === 0 ? "A different saved allowance" : feature,
-        ),
-      };
-      expect(additionalPlanFeatures(changed, locale)).toEqual(changed.features);
-    },
-  );
-
-  it("preserves custom catalog features and responses without matching key metadata", () => {
-    const offer = plan();
-    const features = ["Custom support", "New Cloud capability"];
-    expect(
-      additionalPlanFeatures({ ...offer, features, featureKeys: ["newSupport", "newCapability"] }),
-    ).toEqual(features);
-    expect(additionalPlanFeatures({ ...offer, features, featureKeys: undefined })).toEqual(
-      features,
-    );
-    expect(additionalPlanFeatures({ ...offer, features, featureKeys: ["projects"] })).toEqual(
-      features,
-    );
-  });
-
-  it("keeps capacity copy when the offer has no explicit numeric pool to display", () => {
+  it("does not infer capacity when the offer has no explicit numeric pool", () => {
     const offer = { ...plan(), resourceLimits: undefined };
     expect(planCapacity(offer)).toBeNull();
-    expect(additionalPlanFeatures(offer)).toContain(
-      offer.features[offer.featureKeys!.indexOf("namespaceCapacity")],
-    );
     expect(
       planCapacity({
         ...plan(),
         resourceLimits: { ...plan().resourceLimits!, max_total_vcpus: null },
       }),
     ).toBeNull();
+  });
+});
+
+describe("server subscription choices", () => {
+  const plans = ["hobby", "starter", "pro", "team"].map(id => plan(id as PlanTierId));
+  const choices = (currentOffer?: ApiPlan, allocatedDiskGb?: number) => serverPlanChoices({ plans, currentOffer, allocatedDiskGb, interval: "monthly" });
+
+  it("offers the full paid catalog for a new server and only larger offers for Starter", () => {
+    expect(choices().available.map(plan => plan.id)).toEqual(["hobby", "starter", "pro", "team"]);
+    const result = choices(plan("starter"));
+    expect(result.current).toBe("starter");
+    expect(result.upgrades.map(plan => plan.id)).toEqual(["pro", "team"]);
+    expect(result.other.map(plan => plan.id)).toEqual(["hobby"]);
+  });
+
+  it("does not advertise a smaller disk for an inactive or subscribed server", () => {
+    expect(choices(undefined, 128).available.map(plan => plan.id)).toEqual(["starter", "pro", "team"]);
+    expect(choices(plan("team"), 256).available.map(plan => plan.id)).toEqual(["team"]);
+    expect(choices(plan("team"), 256).upgrades).toEqual([]);
+  });
+
+  it("does not label changed catalog prices or capacity as the saved current plan", () => {
+    const previous = plan("starter");
+    expect(choices({ ...previous, price: { ...previous.price, monthly: 1700 } }).current).toBeNull();
+    const smaller = { ...previous, resourceLimits: { ...previous.resourceLimits!, max_total_ram_mb: 6144 } };
+    expect(choices(smaller).current).toBeNull();
+    const cheaperSmaller = { ...smaller, price: { ...previous.price, monthly: 1700 } };
+    expect(choices(cheaperSmaller).upgrades.map(plan => plan.id)).toContain("starter");
+    expect(choices({ ...previous, monthlyCredits: 1000 }).current).toBeNull();
+  });
+
+  it("uses custom resources rather than its underlying tier to select larger offers", () => {
+    const custom = { ...plan("starter"), configuration: "custom" as const,
+      resourceLimits: { ...plan("pro").resourceLimits!, max_total_vcpus: 6 }, price: { monthly: 6000, annual: null } };
+    const result = choices(custom, 64);
+    expect(result.current).toBeNull();
+    expect(result.upgrades.map(plan => plan.id)).toEqual(["team"]);
+  });
+
+  it("does not call a CPU increase an upgrade when it reduces purchased RAM", () => {
+    const current = { ...plan("hobby"), resourceLimits: { ...plan("hobby").resourceLimits!, max_total_ram_mb: 16384 } };
+    expect(choices(current).upgrades.map(plan => plan.id)).toEqual(["pro", "team"]);
+  });
+
+  it("does not guess current capacity from inherited or missing provider limits", () => {
+    const current = { ...plan("starter"), resourceLimits: undefined };
+    expect(choices(current).current).toBeNull();
+    expect(choices(current).upgrades).toEqual([]);
+  });
+
+  it("compares annual offers using their annual saved price", () => {
+    const annualPlans = plans.map(plan => ({ ...plan, price: { ...plan.price, annual: plan.price.monthly! * 10 } }));
+    const currentOffer = { ...annualPlans[1]!, price: { monthly: null, annual: 20_000 } };
+    const result = serverPlanChoices({ plans: annualPlans, currentOffer, interval: "annual" });
+    expect(result.current).toBe("starter");
+    expect(result.upgrades.map(plan => plan.id)).toEqual(["pro", "team"]);
   });
 });

@@ -196,7 +196,8 @@ export interface PlanDefinition {
    *  payload shape, which clients already read.) */
   description: string;
   price: { monthly: number | null; annual: number | null };
-  /** Milli-credits granted per period; null = granted by hand (enterprise). */
+  billingMode: "metered" | "monthly";
+  /** Milli-credits per period; null when compute is covered by a monthly pool or custom contract. */
   monthlyCredits: number | null;
   oblienLimits: OblienLimits;
   limits: PlanLimits;
@@ -254,11 +255,10 @@ export function computeUnitsPerMinute(tier: FixedResourceTier): number {
   return RESOURCE_TIER_SPECS[tier].cpuCores / RESOURCE_TIER_SPECS.low.cpuCores;
 }
 
-/** Explicit namespace credits per monthly cycle, in milli-credits for Openship
- * clients. Price, resource limits and checkout copy do not change this allowance. */
+/** Metered namespace credits, in milli-credits. Monthly pools have no credit allowance. */
 export function planMonthlyCredits(planId: string | null | undefined): number | null {
   const plan = PLAN_BY_ID.get(planId ?? "") ?? PLAN_BY_ID.get(DEFAULT_PLAN_TIER)!;
-  return plan.billing.creditsPerCycle === null ? null : plan.billing.creditsPerCycle * 1000;
+  return plan.billing.mode === "monthly" || plan.billing.creditsPerCycle === null ? null : plan.billing.creditsPerCycle * 1000;
 }
 
 /** May this tier run that workload? Free ships static-only. */
@@ -323,6 +323,7 @@ export function resolvePlan(planId: PlanTierId, locale: PricingLocale = "en"): P
     name: planName(plan.id, locale),
     description: planTagline(plan.id, locale),
     price: plan.price,
+    billingMode: plan.billing.mode,
     monthlyCredits: planMonthlyCredits(plan.id),
     oblienLimits: { ...plan.billing.resourceLimits },
     limits: plan.limits,

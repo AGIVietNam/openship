@@ -25,8 +25,8 @@ There are three separate things people mix up, so let's name them up front:
 
 ## Connect your instance to Openship Cloud
 
-This links your instance to a Cloud account. It does **not** move any of your projects — it just unlocks the
-option to deploy to Cloud and to use Cloud-backed features.
+This links your instance to a Cloud account. Existing Cloud projects, apps and managed servers appear
+alongside your local resources. Connecting does not move projects or duplicate their settings.
 
 <Steps>
 
@@ -54,16 +54,18 @@ When the window closes, the card flips to a green **Connected** badge showing th
 </Steps>
 
 <Callout title="Connecting doesn't move anything" type="info">
-After connecting, your projects still run exactly where they were. The connection just gives your instance
-permission to talk to Cloud. To actually move a project, see the next section.
+After connecting, your projects still run where they were. Opening a Cloud project uses its Cloud settings,
+history and operations through your instance. Local projects keep their local settings. Managed server
+purchases and billing stay in Cloud. To move a project, see the next section.
 </Callout>
 
 ### Disconnecting
 
-On the same card, the **Disconnect** button unlinks the account. Openship asks you to confirm first, because
-**cloud deployments stop working until you reconnect**, and disconnecting also drops the shared GitHub
-connection that rides on the cloud link — so any repos connected through Cloud will need reconnecting
-afterward.
+On the same card, **Disconnect** unlinks the account. Running workloads continue on their servers, but
+this installation cannot manage Cloud resources or start new work through that connection until you
+reconnect. Cloud inventory refreshes immediately, and any explicit local server links remain visible
+with their connection unavailable. Repositories using the shared Cloud GitHub connection also require
+reconnection.
 
 ## Move one project to Cloud (and back)
 

@@ -119,8 +119,44 @@ the user needs a token or authorization in the destination workspace. Invalid or
 instead of falling back to the default workspace.
 
 This ID selects a request scope; it does **not** transfer an existing app between organizations.
-The existing project transfer endpoints change hosting targets (Cloud/self-hosted). Cross-organization app transfer
-is not currently exposed. `get_cloud_workspaces` lists runtime infrastructure, a separate concept.
+`get_system_servers_destinations` lists authorized execution servers, a separate concept. Select a
+`serverId` when creating or importing a project; changing where it runs does not move its records to
+another Openship instance. Cross-organization app transfer is not currently exposed.
+
+## Deploy a desktop folder on Cloud
+
+Use the MCP connection on the machine that holds the source folder. A connected managed server lets
+that desktop instance build and run the app on Cloud while keeping its project records local:
+
+1. Discover the local `organizationId` with `get_permissions_workspaces` and pass it on every call.
+2. Call `get_system_servers_destinations` and select a managed server. If it is not connected, an
+   administrator can use `get_system_servers_managed_available` and
+   `post_system_servers_managed_connect`. Use the returned **local** `serverId`.
+3. Call `post_projects_import` with `body: { name, localPath, serverId }`. The path must be readable by
+   the desktop controller. For an existing project already assigned to that server, reuse its ID.
+4. Call `post_deployments_build_access` with `body: { projectId, buildStrategy: "server" }`, then poll
+   `get_deployments_by_id` and its logs. Source location and build location are separate: a local
+   folder can be built on a managed server. `buildStrategy: "local"` is not supported on managed servers.
+
+This flow requires project creation/write and destination server write permissions. It does not require
+`transfer_to_cloud` or access to the MCP client's OAuth bearer token.
+
+To manage projects whose records live in Cloud, authorize a separate MCP connection to
+`https://api.openship.io/api/mcp` and discover the Cloud organization there. A local credential cannot
+use the owner's Cloud account link to access those records. `CLOUD_SCOPE_UNAVAILABLE` also applies when
+`organizationId` is omitted; removing it does not widen the credential's permissions.
+
+A remote Cloud controller cannot read a folder on the MCP client's machine. Use a git repository or
+the [authenticated source upload flow](/docs/api/sources#upload-a-source-folder) through an SDK, CLI,
+or browser. A credential restricted to its own projects must create the project first and pass its
+`projectId` to the upload session and subsequent `ensure` call. An unbound upload session requires
+wildcard project write permission. OAuth tokens remain in the MCP client.
+
+Explicit project promotion is a separate configuration transfer. With receipt support on both
+instances, retrying after a lost response or failed local cleanup confirms the original import and
+retries teardown without importing again. A changed source, changed Cloud connection, or an older
+duplicate without a matching receipt stops cleanup and requires review of both copies. An older
+Cloud API without the promotion endpoint rejects the request before importing.
 
 ## Call a tool
 

@@ -36,7 +36,7 @@ const SECTIONS = [
     title: "The service",
     body: [
       "We provide infrastructure to build, ship, and run your applications - managed databases, mail, storage, routing, and the platform tooling around it.",
-      "Openship Cloud is offered on published subscription plans, listed on our pricing page, with usage-based credits on top. Self-hosted use is free under the Apache 2.0 license.",
+      "Openship Cloud monthly server plans cover purchased CPU, RAM and storage for the paid period. Separately priced services and retained storage after that period follow the terms shown in Billing. Existing metered subscriptions keep their saved terms. Self-hosted use is free under the Apache 2.0 license.",
       "We may improve the service, fix bugs, or evolve features at any time. Material breaking changes get at least 30 days' notice.",
     ],
   },

@@ -9,7 +9,7 @@ import { getJobRunner } from "../../lib/job-runner/index";
 import { reconcileOblienEntitlement } from "./billing-oblien-quota";
 
 const RECONCILE_BATCH = 200;
-let cursor: string | undefined;
+let workspaceCursor: string | undefined;
 
 export interface ReconcileStats {
   scanned: number;
@@ -22,23 +22,26 @@ export interface ReconcileStats {
 export async function runEntitlementReconcile(): Promise<ReconcileStats> {
   const stats: ReconcileStats = { scanned: 0, corrected: 0, uncapped: 0, statusFixed: 0, errors: 0 };
   if (!env.CLOUD_MODE) return stats;
-  const orgs = await db.select({ id: schema.organization.id }).from(schema.organization)
-    .where(and(
-      isNotNull(schema.organization.oblienNamespace),
-      cursor ? gt(schema.organization.id, cursor) : undefined,
-    ))
-    .orderBy(asc(schema.organization.id))
-    .limit(RECONCILE_BATCH);
-  for (const org of orgs) {
+  // Each subscribed server is a billing owner. An organization-level pass would
+  // select the same server twice, or fail when the customer owns several.
+  // Keyset pagination reaches every server instead of repeating the first batch.
+  const workspaces = await db.select().from(schema.cloudWorkspace).where(and(
+    isNotNull(schema.cloudWorkspace.namespace),
+    workspaceCursor ? gt(schema.cloudWorkspace.id, workspaceCursor) : undefined,
+  )).orderBy(asc(schema.cloudWorkspace.id)).limit(RECONCILE_BATCH);
+  for (const workspace of workspaces) {
     stats.scanned += 1;
-    const drift = await reconcileOblienEntitlement(org.id);
+    const drift = await reconcileOblienEntitlement(workspace.organizationId, workspace.id);
     if (!drift) { stats.errors += 1; continue; }
     if (drift.quotaMissing) stats.uncapped += 1;
-    if (drift.statusNow !== drift.statusWas) stats.statusFixed += 1;
     if (drift.changed) stats.corrected += 1;
+    if (drift.statusNow !== drift.statusWas) stats.statusFixed += 1;
+    try {
+      const { requestPaidWorkspaceProvisioning } = await import("../cloud-workspaces/cloud-workspace.service");
+      await requestPaidWorkspaceProvisioning(workspace.organizationId, workspace.id);
+    } catch { stats.errors += 1; }
   }
-  // Keyset pagination reaches every customer, unlike repeatedly reading LIMIT 200.
-  cursor = orgs.length === RECONCILE_BATCH ? orgs[orgs.length - 1]!.id : undefined;
+  workspaceCursor = workspaces.length === RECONCILE_BATCH ? workspaces[workspaces.length - 1]!.id : undefined;
   return stats;
 }
 

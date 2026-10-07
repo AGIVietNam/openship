@@ -846,6 +846,27 @@ export function createBackupRunRepo(db: Database) {
       });
     },
 
+    /** Bounded history for dump-size validation; never mix fan-out siblings. */
+    async recentSucceededForSource(
+      policyId: string,
+      destinationId: string,
+      serviceId: string | null,
+      mailServerId: string | null,
+    ): Promise<BackupRun[]> {
+      return db.query.backupRun.findMany({
+        where: and(
+          eq(backupRun.policyId, policyId),
+          eq(backupRun.destinationId, destinationId),
+          serviceId ? eq(backupRun.serviceId, serviceId) : isNull(backupRun.serviceId),
+          mailServerId ? eq(backupRun.mailServerId, mailServerId) : isNull(backupRun.mailServerId),
+          eq(backupRun.status, "succeeded"),
+          isNull(backupRun.deletedAt),
+        ),
+        orderBy: [desc(backupRun.finishedAt), desc(backupRun.id)],
+        limit: 3,
+      });
+    },
+
     async latestSucceededForSource(
       policyId: string,
       destinationId: string,

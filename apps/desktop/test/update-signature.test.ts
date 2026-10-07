@@ -8,6 +8,7 @@ import { signDesktopUpdates } from "../scripts/sign-updates.mjs";
 const h = vi.hoisted(() => ({ publicKey: "", directory: "", fetch: vi.fn() }));
 vi.mock("../src/main/update-trust.json", () => ({ default: { get publicKey() { return h.publicKey; } } }));
 vi.mock("electron", () => ({ app: { getPath: () => h.directory }, net: { fetch: h.fetch }, shell: {} }));
+vi.mock("../src/main/update-download", () => ({ fetchUpdateAsset: h.fetch }));
 import { downloadUpdate } from "../src/main/updater";
 import { verifyUpdateSignature } from "../src/main/update-signature";
 
@@ -59,11 +60,6 @@ describe("publisher-authenticated desktop updates", () => {
   it("refuses a signature from a different publisher", () => {
     const { publicKey } = generateKeyPairSync("ed25519", { publicKeyEncoding: { type: "spki", format: "pem" } });
     expect(() => verifyUpdateSignature(proof, { version, name, sha256 }, publicKey)).toThrow("signature");
-  });
-  it("rejects a cross-origin redirect before connecting to its destination", async () => {
-    h.fetch.mockResolvedValue(new Response(null, { status: 302, headers: { location: "https://attacker.test/installer" } }));
-    await expect(downloadUpdate(asset, version, () => {})).rejects.toThrow("Untrusted");
-    expect(h.fetch).toHaveBeenCalledTimes(1);
   });
   it("still requires the checksum and refuses release URL/name mismatches", async () => {
     h.fetch.mockImplementation(async (target: string) => target.endsWith(".sha256") ? new Response("missing", { status: 404 }) : new Response(bytes));

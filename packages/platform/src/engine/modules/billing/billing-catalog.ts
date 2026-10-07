@@ -10,11 +10,16 @@ import {
   type PlanLimits,
   type PlanTierId,
 } from "@repo/core";
-import type { BillingPlans } from "@repo/contracts";
+import type { BillingPlans, CustomSubscriptionSelection } from "@repo/contracts";
 import type { OblienOffer, OblienSubscription } from "../../lib/oblien-billing-api";
 import { cloudNamespaceLimits } from "../../lib/cloud-resource-limits";
 import { fromOblienCredits, toOblienCredits } from "./billing-credit-units";
 import type { ResolvedPlanGrant } from "./billing-plan-grants";
+import { CUSTOM_OFFER_VERSION, validCustomOffer, customSubscriptionOffer, isCustomOfferVersion } from "./billing-custom-offer";
+import { monthlyCapacity } from "./billing-capacity";
+import type { OblienCapacityCatalog } from "../../lib/oblien-capacity";
+import { getOblienBillingApi } from "../../lib/oblien-client";
+import { isDeepStrictEqual } from "node:util";
 
 // Read compatibility for subscriptions sold before Openship owned its offers.
 // New checkouts never use these platform catalog IDs.
@@ -34,21 +39,23 @@ export const CLOUD_EDGE_BANDWIDTH_GB: Readonly<Record<PlanTierId, number | null>
 };
 
 // Version price/term changes so checkout retries cannot reuse an earlier quote.
-export const OFFER_VERSION = "6";
+export const OFFER_VERSION = "10";
+const MONTHLY_OFFER_VERSIONS: ReadonlySet<string> = new Set(["9", OFFER_VERSION]);
 const TOPUP_OFFER_VERSION = "3";
 export const offerReference = (tier: PlanTierId) => `openship:${tier}:v${OFFER_VERSION}`;
 
 export function supportedOfferReference(reference: string | undefined, tier: PlanTierId): boolean {
-  return reference === offerReference(tier) || reference === `openship:${tier}:v5` || reference === `openship:${tier}:v4` || reference === `openship:${tier}:v3` || (tier !== "hobby" &&
+  return [...MONTHLY_OFFER_VERSIONS].some(version => reference === `openship:${tier}:v${version}`) || reference === `openship:${tier}:v8` || reference === `openship:${tier}:v7` || reference === `openship:${tier}:v6` || reference === `openship:${tier}:v5` || reference === `openship:${tier}:v4` || reference === `openship:${tier}:v3` || (tier !== "hobby" &&
     (reference === `openship:${tier}:v1` || reference === `openship:${tier}:v2`));
 }
 
-/** Offers without a complete saved capacity policy retain their pre-v4 VM CPU
- * ceilings. New offers always read the current catalog. */
+/** Offers without a complete saved capacity policy retain their old ceilings.
+ * These contracts cannot inherit the larger v7 RAM/disk from the public catalog. */
 function inheritedResourceLimits(tier: PlanTierId): ReturnType<typeof cloudNamespaceLimits> {
   const limits = cloudNamespaceLimits(tier);
-  if (tier === "pro") limits.max_vcpus = 2;
-  if (tier === "team") limits.max_vcpus = 4;
+  if (tier === "starter") Object.assign(limits, { max_workspaces: 3, max_ram_mb: 6144, max_total_ram_mb: 6144, max_disk_gb: 32, max_total_disk_gb: 32 });
+  if (tier === "pro") Object.assign(limits, { max_workspaces: 6, max_vcpus: 2, max_ram_mb: 8192, max_total_ram_mb: 8192, max_disk_gb: 32, max_total_disk_gb: 128 });
+  if (tier === "team") Object.assign(limits, { max_workspaces: 12, max_vcpus: 4, max_ram_mb: 12288, max_total_ram_mb: 16384, max_disk_gb: 64, max_total_disk_gb: 256 });
   return limits;
 }
 
@@ -92,48 +99,72 @@ export function subscriptionPlan(subscription: OblienSubscription, organizationI
   const { offer, metadata } = subscription;
   const tier = metadata?.openship_plan as PlanTierId;
   const version = metadata?.openship_offer_version;
-  if (!PLAN_IDS.includes(tier) || tier === "free" || !offer || !metadata || !supportedOfferReference(offer.reference, tier) ||
-      offer.reference !== `openship:${tier}:v${version}` || !metadata.openship_organization || !metadata.openship_namespace ||
+  const custom = isCustomOfferVersion(version);
+  const monthly = offer?.billingMode === "monthly";
+  const monthlyVersion = custom ? version === CUSTOM_OFFER_VERSION : MONTHLY_OFFER_VERSIONS.has(version ?? "");
+  if (!PLAN_IDS.includes(tier) || tier === "free" || !offer || !metadata ||
+      (!custom && (!supportedOfferReference(offer.reference, tier) || offer.reference !== `openship:${tier}:v${version}`)) ||
+      !metadata.openship_organization || !metadata.openship_namespace ||
       (organizationId !== undefined && metadata.openship_organization !== organizationId) ||
-      (namespace !== undefined && metadata.openship_namespace !== namespace) || !offer.policy || !offer.resourceLimits) invalidContract();
+      (namespace !== undefined && metadata.openship_namespace !== namespace) || (!monthly && !offer.policy) || !offer.resourceLimits) invalidContract();
   let decoded: unknown;
   try { decoded = JSON.parse(metadata.openship_limits ?? ""); } catch { invalidContract(); }
   const parsed = planLimitsSchema.strict().safeParse(decoded);
   if (!parsed.success) invalidContract();
+  if (monthly) {
+    if (subscription.billingInterval !== "monthly" || offer.credits !== 0 || offer.policy ||
+        !monthlyVersion || !offer.capacity) invalidContract();
+    try {
+      if (!isDeepStrictEqual(monthlyCapacity(offer.resourceLimits as ReturnType<typeof cloudNamespaceLimits>), offer.capacity)) invalidContract();
+    } catch { invalidContract(); }
+  } else if (monthlyVersion) invalidContract();
+  if (custom) {
+    if (subscription.billingInterval !== "monthly" || !validCustomOffer(tier, parsed.data, offer)) invalidContract();
+    return { tier, limits: parsed.data, resourceLimits: offer.resourceLimits as ReturnType<typeof cloudNamespaceLimits> };
+  }
   if (Number(version) >= 4 && tier !== "enterprise" && !parsed.data.maxServiceResources) invalidContract();
   return { tier, limits: parsed.data, resourceLimits: savedResourceLimits(tier, offer) };
 }
 
-/** Openship controls the price, credit allowance and checkout copy. */
+/** Openship controls retail price and copy; Oblien purchases the resource pool. */
 export function subscriptionOffer(tier: PlanTierId, interval: "monthly" | "annual"): OblienOffer {
   const raw = PRICING.plans.find(plan => plan.id === tier);
   const amount = raw?.price[interval];
-  const credits = interval === "annual" ? raw?.billing.yearlyCreditsPerCycle : raw?.billing.creditsPerCycle;
-  if (!raw || !amount || !credits || (interval === "annual" && !PRICING.annual.enabled)) {
+  if (!raw || !amount || raw.billing.mode !== "monthly" || interval !== "monthly") {
     throw new AppError("This plan is not available for checkout", 400, "BILLING_PLAN_NOT_PURCHASABLE");
   }
   const plan = resolvePlan(tier);
   return {
     reference: offerReference(tier), name: raw.billing.checkoutName ?? `Openship ${plan.name}`,
     description: raw.billing.checkoutDescription ?? plan.description,
-    unitAmount: amount, currency: "usd", credits,
-    policy: { overdraft: raw.billing.overdraft, suspendThreshold: raw.billing.suspendThreshold,
-      onOverdraftAction: raw.billing.onOverdraftAction },
+    unitAmount: amount, currency: "usd", billingMode: "monthly", credits: 0,
+    capacity: monthlyCapacity(cloudNamespaceLimits(tier)),
     resourceLimits: cloudNamespaceLimits(tier),
   };
+}
+
+/** New purchases and in-place changes resolve exactly the same trusted terms. */
+export async function resolveSubscriptionSelection(tier: PlanTierId, interval: "monthly" | "annual", custom?: CustomSubscriptionSelection) {
+  await getOblienBillingApi().assertMonthlyCapacitySupport();
+  const terms = custom ? customSubscriptionOffer(custom.resources) : null;
+  if (terms && (interval !== "monthly" || tier !== terms.quote.basePlanTierId || custom?.quoteReference !== terms.quote.reference))
+    throw new AppError("This resource quote has changed. Refresh the price before continuing.", 409, "BILLING_QUOTE_CHANGED");
+  const offer = terms?.offer ?? subscriptionOffer(tier, interval);
+  return { offer, customLimits: terms?.limits };
 }
 
 export function subscriptionMetadata(
   tier: PlanTierId,
   organizationId: string,
   namespace: string,
+  customLimits?: PlanLimits,
 ): Record<string, string> {
   return {
     openship_plan: tier,
-    openship_offer_version: OFFER_VERSION,
+    openship_offer_version: customLimits ? CUSTOM_OFFER_VERSION : OFFER_VERSION,
     openship_organization: organizationId,
     openship_namespace: namespace,
-    openship_limits: JSON.stringify(planLimits(tier)),
+    openship_limits: JSON.stringify(customLimits ?? planLimits(tier)),
   };
 }
 
@@ -151,7 +182,7 @@ export function topupOffer(packId: string): OblienOffer {
   };
 }
 
-export function presentCloudPlans(requestedLocale?: string): BillingPlans {
+export function presentCloudPlans(requestedLocale?: string, capacityCatalog?: OblienCapacityCatalog): BillingPlans {
   const locale = toPricingLocale(requestedLocale);
   const plans = PLAN_IDS.map((id) => {
     const plan = resolvePlan(id, locale);
@@ -161,6 +192,7 @@ export function presentCloudPlans(requestedLocale?: string): BillingPlans {
       name: raw.billing.checkoutName ?? plan.name,
       description: raw.billing.checkoutDescription ?? (id === "free" ? "" : plan.description),
       popular: plan.popular,
+      billingMode: raw.billing.mode,
       price: {
         monthly: raw.price.monthly,
         annual: PRICING.annual.enabled ? raw.price.annual : null,
@@ -169,7 +201,7 @@ export function presentCloudPlans(requestedLocale?: string): BillingPlans {
       listPrice: { monthly: raw.price.monthly },
       campaign: null,
       monthlyCredits:
-        raw.billing.creditsPerCycle === null
+        raw.billing.mode === "monthly" || raw.billing.creditsPerCycle === null
           ? null
           : fromOblienCredits(raw.billing.creditsPerCycle),
       annualCredits:
@@ -189,6 +221,18 @@ export function presentCloudPlans(requestedLocale?: string): BillingPlans {
     provider: "oblien",
     locale,
     annual: { enabled: PRICING.annual.enabled, monthsFree: PRICING.annual.monthsFree },
+    custom: { resources: PRICING.custom.resources, extraMonthlyCents: PRICING.custom.extraMonthlyCents },
+    payg: structuredClone(PRICING.payg),
+    ...(capacityCatalog ? { computePricing: {
+      tariffId: capacityCatalog.tariffId, currency: capacityCatalog.currency,
+      creditsPerDollar: capacityCatalog.tariff.creditsPerDollar,
+      paygCapPercent: capacityCatalog.tariff.paygCapPercent,
+      usage: capacityCatalog.tariff.usage, network: capacityCatalog.tariff.network,
+      retentionDays: capacityCatalog.tariff.terms.retainedAfterExpiryDays,
+      // The deployed PAYG purchase debits the reseller's wallet. It is not a
+      // tenant-funded checkout and must not spend another customer's funds.
+      paygCheckoutAvailable: false,
+    } } : {}),
     ui: pricingUi(locale),
     plans,
   };
@@ -204,6 +248,9 @@ export async function cloudPlan(tier: PlanTierId, subscription?: OblienSubscript
   const yearly = subscription.billingInterval === "yearly";
   return {
     ...plan,
+    configuration: isCustomOfferVersion(subscription.metadata?.openship_offer_version) ? "custom" as const : "preset" as const,
+    offerReference: offer.reference,
+    billingMode: offer.billingMode === "monthly" ? "monthly" as const : "metered" as const,
     name: offer.name,
     description: offer.description ?? "",
     limits: { ...limits, workloads: [...limits.workloads] },
@@ -214,7 +261,7 @@ export async function cloudPlan(tier: PlanTierId, subscription?: OblienSubscript
     price: { monthly: yearly ? null : offer.unitAmount, annual: yearly ? offer.unitAmount : null },
     effectivePrice: { monthly: yearly ? null : offer.unitAmount },
     listPrice: { monthly: yearly ? null : offer.unitAmount },
-    monthlyCredits: yearly ? null : fromOblienCredits(offer.credits),
+    monthlyCredits: yearly || offer.billingMode === "monthly" ? null : fromOblienCredits(offer.credits),
     annualCredits: yearly ? fromOblienCredits(offer.credits) : null,
   };
 }
@@ -223,7 +270,7 @@ export async function cloudPlan(tier: PlanTierId, subscription?: OblienSubscript
 export function complimentaryCloudPlan(grant: ResolvedPlanGrant) {
   const plan = presentCloudPlans().plans.find(item => item.id === grant.tier)!;
   return {
-    ...plan, name: grant.offer.name, description: grant.offer.description ?? "",
+    ...plan, billingMode: "metered" as const, name: grant.offer.name, description: grant.offer.description ?? "",
     limits: { ...grant.limits, workloads: [...grant.limits.workloads] },
     resourceLimits: grant.resourceLimits,
     features: [], featureKeys: [], inheritedFrom: null, campaign: null,

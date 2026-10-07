@@ -37,10 +37,10 @@ vi.mock("@/components/i18n-provider", () => ({
 }));
 // The independent resource/app forms aren't under test. The real provider,
 // Configuration surface, project env editor and modal run together.
-vi.mock("./ResourceSettings", () => ({ ResourceSettings: () => null }));
+vi.mock("./ResourceSettings", () => ({ ResourceSettings: () => <section aria-label="Machine power" /> }));
 vi.mock("./StorageSettings", () => ({ StorageSettings: () => null }));
 vi.mock("./ServicesTab", () => ({ ServicesTab: () => <div>Service list</div> }));
-vi.mock("./AppSettingsTab", () => ({ AppSettingsTab: () => null }));
+vi.mock("./AppSettingsTab", () => ({ AppSettingsTab: () => <input aria-label="App setting" defaultValue="original" /> }));
 
 let root: Root;
 let host: HTMLDivElement;
@@ -158,18 +158,37 @@ describe("project environment access (GH-881)", () => {
   it("keeps the shared editor for monorepos", async () => {
     api.services.mockResolvedValue({ success: true, services: [{ id: "sub", name: "api", kind: "monorepo" }] });
     await mountProject("node");
-    expect(host.textContent).toContain("1 sub-app");
     expect(host.textContent).toContain("Project environment (build + shared runtime)");
     expect(host.querySelector('nav a[href$="/advanced"]')).not.toBeNull();
+    expect(host.querySelectorAll('section[aria-label="Machine power"]')).toHaveLength(1);
   });
 
-  it("includes shared project inputs in the installed app's Deployment mode", async () => {
+  it("shows installed-app and project settings together without a second service list", async () => {
     await mountProject("docker-compose", <AppConfiguration />, {
       isApp: true,
-      appTemplateId: "n8n",
+      appTemplateId: "mongodb",
     });
-    await act(async () => button("Deployment").click());
     expect(host.textContent).toContain("Project environment (build + shared runtime)");
-    expect(host.textContent).toContain("Service list");
+    expect(host.textContent).not.toContain("Service list");
+    expect(host.querySelectorAll('section[aria-label="Machine power"]')).toHaveLength(1);
+    const actions = [...host.querySelectorAll("button")].map((element) => element.textContent?.trim());
+    expect(actions).not.toContain("App settings");
+    expect(actions).not.toContain("Deployment");
+
+    const appInput = host.querySelector<HTMLInputElement>('input[aria-label="App setting"]')!;
+    await editInput(appInput, "unsaved app setting");
+    await act(async () => button("Edit").click());
+    expect(api.getEnv).toHaveBeenCalledWith("project");
+    expect(host.querySelector('input[aria-label="App setting"]')).toBe(appInput);
+    expect(appInput.value).toBe("unsaved app setting");
+  });
+
+  it.each([false, true])("keeps limits available for a static site's companion services (%s)", async (hasCompanion) => {
+    api.services.mockResolvedValue({ success: true, services: hasCompanion
+      ? [{ id: "cache", name: "redis", kind: "compose" }]
+      : [] });
+    await mountProject("static", <BuildSettings />, { options: { hasServer: false, workloadType: "static" } });
+    expect(host.querySelectorAll('section[aria-label="Machine power"]')).toHaveLength(hasCompanion ? 1 : 0);
+    expect(host.textContent).toContain("Project environment (build + shared runtime)");
   });
 });

@@ -60,6 +60,7 @@
   "fix": "修復",
   "install": "インストール",
   "update": "更新",
+  "updating": "更新中…",
   "mailSetup": "メール設定",
   "selfUpdateNote": "このインストールはコマンドラインから自身を更新します。",
   "empty": {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createHmac } from "node:crypto";
+import { monthlyCloudBilling } from "../../../test/helpers/monthly-cloud-offer";
 
 /**
  * End-to-end dispatch test for the Oblien webhook handler with every heavy
@@ -72,6 +73,7 @@ vi.mock("@repo/db", () => {
       oblienWebhookEvent: { kind: "event", oblienEventId: {}, processedAt: {} },
     },
     repos: {
+      cloudWorkspace: { findByNamespace: async () => undefined },
       billingUsageSnapshot: { upsert: h.usageUpsert },
       organization: { findById: h.orgFindById },
     },
@@ -148,6 +150,30 @@ describe("oblienWebhook — signature gate", () => {
 });
 
 describe("oblienWebhook — dispatch", () => {
+  it.each(["capacity.changed", "capacity.renewed", "capacity.expired", "capacity.payment_required", "capacity.revoked",
+    "network.topup_applied", "network.allowance.low", "network.allowance.depleted",
+    "storage.retention.payment_required", "storage.retention.paid"])("reconciles and deduplicates signed %s events using current coverage", async event => {
+    const { entitlement } = monthlyCloudBilling("org_1", "os-abc");
+    h.sync.mockResolvedValue({ tier: "pro", entitlement });
+    const id = `event-${event}`;
+    const body = JSON.stringify({ id, event, data: { namespace: "os-abc", computeCovered: false, balance: -999 } });
+    const receive = () => oblienWebhook(makeCtx(body, sign(body), id)) as unknown as Promise<JsonResult>;
+    expect((await receive()).status).toBe(200);
+    expect((await receive()).status).toBe(200);
+    expect(h.sync).toHaveBeenCalledOnce();
+    expect(h.processed.size).toBe(1);
+    expect(h.notificationEmit).not.toHaveBeenCalled();
+    expect(h.usageUpsert).not.toHaveBeenCalled();
+  });
+  it("does not replay an old credit-exhaustion alert after adopting monthly coverage", async () => {
+    const { entitlement } = monthlyCloudBilling("org_1", "os-abc");
+    h.sync.mockResolvedValue({ tier: "pro", entitlement });
+    const body = JSON.stringify({ id: "old-credit-event", event: "credits.depleted", data: { namespace: "os-abc", balance: 0 } });
+    const response = await oblienWebhook(makeCtx(body, sign(body), "old-credit-event")) as unknown as JsonResult;
+    expect(response.status).toBe(200);
+    expect(h.notificationEmit).not.toHaveBeenCalled();
+    expect(h.auditRecord).not.toHaveBeenCalled();
+  });
   it("credits.usage uses the fresh namespace balance instead of an owner-wallet or stale payload balance", async () => {
     h.sync.mockResolvedValue({ entitlement: { namespace: "os-abc", status: "active", quota: { balance: 5 } } });
     const body = JSON.stringify({

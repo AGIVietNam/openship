@@ -1,33 +1,32 @@
 "use client";
 
-import { useSelectedLayoutSegment } from "next/navigation";
+import { ServerBillingPicker, billingServersVisible, useBillingServerInventory } from "@/components/billing/ServerBillingPicker";
 
-/**
- * Body of the billing layout. Wraps the active tab's children and an
- * optional sidebar slot, hiding the sidebar on the "plans" tab (the
- * plans grid wants the full content width). Client-side because the
- * sidebar visibility depends on the active layout segment.
- */
 export function BillingContent({
   children,
   sidebar,
-  promotePlan = false,
+  layout = "details",
 }: {
   children: React.ReactNode;
   sidebar: React.ReactNode | null;
-  promotePlan?: boolean;
+  layout?: "details" | "plans" | "purchase";
 }) {
-  const segment = useSelectedLayoutSegment();
-  const showSidebar = sidebar !== null && segment !== "plans";
-
-  if (!showSidebar) {
+  const inventory = useBillingServerInventory();
+  // Plans keep the whole comparison width. Usage and history retain the
+  // visible server list; purchasing another server has no selected subscription.
+  const showServers = billingServersVisible(inventory);
+  if (layout !== "details") return <div className="min-w-0 space-y-5">{children}</div>;
+  if (!sidebar && !showServers) {
     return <div className="min-w-0">{children}</div>;
   }
 
   return (
-    <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px] xl:gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="min-w-0">{children}</div>
-      <aside className={`min-w-0 lg:sticky lg:top-6 ${promotePlan ? "order-first lg:order-last" : ""}`}>{sidebar}</aside>
+    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="order-2 min-w-0 lg:order-1">{children}</div>
+      <aside className="order-1 min-w-0 space-y-4 lg:sticky lg:top-6 lg:order-2">
+        {showServers && <ServerBillingPicker />}
+        {sidebar}
+      </aside>
     </div>
   );
 }

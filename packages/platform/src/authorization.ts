@@ -77,7 +77,7 @@ export interface PermissionRepositories {
 export interface AuthorizationDependencies {
   repos: PermissionRepositories;
   grantSourceFor(ctx: ExecutionContext): PermissionGrantSource;
-  /** A self-hosted gateway can authorize an upstream project before forwarding. */
+  /** A self-hosted gateway can authorize upstream account resources before forwarding. */
   cloud?: { isCanonical(): boolean; isLinked(organizationId: string): Promise<boolean> };
   now?: () => number;
 }
@@ -214,7 +214,7 @@ export function createAuthorization(deps: AuthorizationDependencies) {
     if (input.scope === "list" || input.resourceId === "*") return scopeOrg;
     const resource = await resolveResourceOrg(input.resourceType, input.resourceId);
     if (resource) return resource.orgId;
-    if (!canForward() || !PROJECT_ROOTED.has(input.resourceType) || !scopeOrg) return null;
+    if (!canForward() || (!PROJECT_ROOTED.has(input.resourceType) && input.resourceType !== "server") || !scopeOrg) return null;
     return (await deps.cloud!.isLinked(scopeOrg).catch(() => false)) ? scopeOrg : null;
   }
 

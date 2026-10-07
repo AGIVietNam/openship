@@ -22,7 +22,7 @@
     },
     "hobby": {
       "name": "Hobby",
-      "tagline": "Para desenvolvimento leve e aplicações ocasionais, com saldo de utilização limitado."
+      "tagline": "Um pequeno servidor gerenciado para projetos pessoais e aplicativos do dia a dia."
     }
   },
   "features": {
@@ -31,7 +31,7 @@
     "anyWorkload": "Execute qualquer coisa: contêineres, Compose, workers, Postgres, Redis",
     "runningServices": "{runningServices} apps, bancos de dados ou workers em execução",
     "buildMinutes": "{buildMinutes} minutos de build por mês",
-    "meteredBuilds": "Os builds usam créditos compartilhados, sem limite de tempo mensal",
+    "sharedBuilds": "Os builds compartilham seu servidor, sem limite de tempo mensal",
     "power": "Até {powerCpu} vCPU e {powerRamGb} GB de RAM por app",
     "projects": "{maxProjects} projetos",
     "projectsUnlimited": "Projetos ilimitados",
@@ -55,10 +55,8 @@
     "selfHostedServices": "Todos os serviços gerenciados: Postgres, Redis, e-mail",
     "selfHostedClients": "CLI, web e desktop: um único backend",
     "selfHostedFreeSubdomains": "{freeSubdomains} subdomínios {freeDomainSuffix} gratuitos ao conectar à Cloud",
-    "usageCredits": "{credits} créditos de uso por mês",
-    "namespaceCapacity": "Total: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB de disco",
-    "finiteUsage": "A hospedagem contínua pode exigir recargas de créditos.",
-    "oneRunningService": "1 aplicação, banco de dados ou worker em execução"
+    "monthlyCoverage": "CPU, RAM e armazenamento incluídos durante o mês pago",
+    "namespaceCapacity": "Total: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB de disco"
   },
   "selfHosted": {
     "name": "Auto-hospedado",

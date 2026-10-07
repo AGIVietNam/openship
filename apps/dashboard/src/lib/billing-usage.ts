@@ -7,9 +7,10 @@ export function formatBillingNumber(value: number, locale: string): string {
   return value.toLocaleString(locale, { maximumFractionDigits: 2 });
 }
 
-export interface CreditUsagePoint {
+export interface CloudUsagePoint {
   timestamp: string;
   credits: number;
+  vcpu_hours?: number;
 }
 
 export interface CloudUsageTotals {
@@ -24,7 +25,7 @@ export interface CloudUsageTotals {
 }
 
 export interface CloudUsagePayload {
-  buckets: CreditUsagePoint[];
+  buckets: CloudUsagePoint[];
   totals: CloudUsageTotals;
 }
 
@@ -44,15 +45,19 @@ export function billingUsageWindow(from: string, to: string, now = new Date()): 
   return { from: start.toISOString(), to: new Date(Math.min(end.getTime(), now.getTime())).toISOString() };
 }
 
-export function weeklyCreditUsage(buckets: CreditUsagePoint[]): CreditUsagePoint[] {
-  const weeks = new Map<string, number>();
+export function weeklyUsage(buckets: CloudUsagePoint[]): CloudUsagePoint[] {
+  const weeks = new Map<string, CloudUsagePoint>();
   for (const bucket of buckets) {
     const monday = usageTimestamp(bucket.timestamp);
     if (!Number.isFinite(monday.getTime())) continue;
     monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
     monday.setUTCHours(0, 0, 0, 0);
     const key = monday.toISOString();
-    weeks.set(key, (weeks.get(key) ?? 0) + bucket.credits);
+    const week = weeks.get(key) ?? { timestamp: key, credits: 0, vcpu_hours: 0 };
+    week.credits += bucket.credits;
+    week.vcpu_hours = week.vcpu_hours !== undefined && bucket.vcpu_hours !== undefined
+      ? week.vcpu_hours + bucket.vcpu_hours : undefined;
+    weeks.set(key, week);
   }
-  return [...weeks.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([timestamp, credits]) => ({ timestamp, credits }));
+  return [...weeks.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
 }

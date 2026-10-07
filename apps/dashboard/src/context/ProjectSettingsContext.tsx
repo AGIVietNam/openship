@@ -1,4 +1,5 @@
 "use client";
+import { useCloudResourceKey } from "./CloudResourceContext";
 import type { IconName } from "@repo/ui/icons";
 import React, {
   createContext,
@@ -101,7 +102,7 @@ interface BasicProjectData {
   deployTarget?: "cloud" | "server" | "local" | "cluster";
   clusterId?: string | null;
   clusterConfig?: import("@repo/core").ClusterWorkloadConfig | null;
-  cloudWorkspaceId?: string | null;
+  workspaceId?: string | null;
   deletedAt?: string | null;
   packageManager?: string;
   /** Source metadata for prebuilt release/image projects. */
@@ -329,7 +330,14 @@ interface ProviderProps {
   initialProjectData?: BasicProjectData;
 }
 
-export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
+export const ProjectSettingsProvider: React.FC<ProviderProps> = (props) => {
+  const resourceKey = useCloudResourceKey();
+  const seedOwner = useRef(resourceKey);
+  return <ProjectSettingsState key={resourceKey} {...props}
+    initialProjectData={seedOwner.current === resourceKey ? props.initialProjectData : undefined} />;
+};
+
+const ProjectSettingsState: React.FC<ProviderProps> = ({
   children,
   id,
   slug,
@@ -597,7 +605,7 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
       }
     }
 
-    const target = projectData.cloudWorkspaceId
+    const target = projectData.workspaceId
       ? "cloud"
       : (projectData as any).serverId
         ? "server"
@@ -927,8 +935,9 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
 
   const removeEnvironment = useCallback(
     (environmentId: string) => {
-      const remaining = removeProjectEnvironment(environments, environmentId);
-      setEnvironments(remaining);
+      // A deletion can finish after this provider switches to another project.
+      // Filter the current list; never replace it with the request's old list.
+      setEnvironments((current) => removeProjectEnvironment(current, environmentId));
       invalidateProjectCachesFor(projectEnvironmentIds(environmentId, environments));
     },
     [environments],

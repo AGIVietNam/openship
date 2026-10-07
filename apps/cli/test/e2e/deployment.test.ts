@@ -8,9 +8,10 @@ vi.mock("../../src/lib/config", () => ({
 
 import { deploymentCommand } from "../../src/commands/deployment";
 import { runCommand, stubFetch, type FetchStub } from "../helpers/harness";
+import { setJsonMode } from "../../src/lib/output";
 
 let fetchStub: FetchStub;
-afterEach(() => fetchStub?.restore());
+afterEach(() => { fetchStub?.restore(); setJsonMode(false); });
 
 describe("openship deployment get", () => {
   it("GETs /deployments/:id and renders it", async () => {
@@ -77,5 +78,29 @@ describe("openship deployment cancel", () => {
     expect(code).toBe(1);
     expect(err).toContain("worker is still stopping");
     expect(err).not.toContain("Cancelled dep1");
+  });
+});
+
+describe("deployment automation", () => {
+  it("refuses deletion without --yes in JSON mode", async () => {
+    setJsonMode(true);
+    fetchStub = stubFetch(() => { throw new Error("Must not delete without confirmation"); });
+    const result = await runCommand(deploymentCommand, ["rm", "dep1"]);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("--yes");
+    expect(fetchStub.calls).toEqual([]);
+  });
+
+  it.each(["ready", "failed", "action_required"])("returns the persisted %s outcome in JSON with an accurate exit", async status => {
+    setJsonMode(true);
+    fetchStub = stubFetch(() => ({ json: {
+      success: true, deployment_id: "dep1", project_id: "project-a", status, deploymentStatus: status,
+      is_active: false, cancellationPending: false, decisionPending: status === "action_required",
+      pendingPrompt: status === "action_required" ? { promptId: "p", title: "Choose", message: "Choose an action", actions: [{ id: "abort", label: "Abort" }] } : null,
+    } }));
+    const result = await runCommand(deploymentCommand, ["wait", "dep1", "--timeout", "1000"]);
+    expect(result.code).toBe(status === "ready" ? 0 : 1);
+    expect(JSON.parse(result.out)).toMatchObject({ status, success: status === "ready" });
+    expect(fetchStub.calls.every(req => req.method === "GET")).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { projectsApi } from "@/lib/api";
 import { type Project } from "@/constants/mock";
+import { useCloudResourceKey } from "@/context/CloudResourceContext";
 
 interface DashboardNumbers {
   total_active_projects?: number;
@@ -22,6 +23,8 @@ export interface OtherOrgHint {
 }
 
 export function useDashboardHome(initialData?: any) {
+  const resourceKey = useCloudResourceKey();
+  const [owner, setOwner] = useState(resourceKey);
   const [projects, setProjects] = useState<Project[]>(initialData?.projects || []);
   const [numbers, setNumbers] = useState<DashboardNumbers>(initialData?.numbers || {});
   const [otherOrgs, setOtherOrgs] = useState<OtherOrgHint[]>(initialData?.otherOrgs || []);
@@ -29,15 +32,22 @@ export function useDashboardHome(initialData?: any) {
   const initRef = useRef(false);
 
   useEffect(() => {
-    // If we already have SSR initialData, no need to fetch!
-    if (initialData) return;
-
-    if (initRef.current) return;
+    if (!initRef.current && initialData) {
+      initRef.current = true;
+      return;
+    }
     initRef.current = true;
+    let active = true;
+    setOwner(resourceKey);
+    setProjects([]);
+    setNumbers({});
+    setOtherOrgs([]);
+    setLoading(true);
 
     (async () => {
       try {
         const res = await projectsApi.getHome();
+        if (!active) return;
         setNumbers(res.numbers ?? {});
         if (res.success && Array.isArray(res.projects)) {
           setProjects(res.projects);
@@ -49,11 +59,13 @@ export function useDashboardHome(initialData?: any) {
       } catch {
         /* silent */
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
-  }, [initialData]);
+    return () => { active = false; };
+  }, [resourceKey]); // SSR data only seeds the first view; connection changes fetch a fresh account inventory.
 
   const removeProject = (id: string) => setProjects(current => current.filter(project => project.id !== id));
-  return { projects, numbers, otherOrgs, loading, removeProject };
+  const current = owner === resourceKey;
+  return { projects: current ? projects : [], numbers: current ? numbers : {}, otherOrgs: current ? otherOrgs : [], loading: !current || loading, removeProject };
 }

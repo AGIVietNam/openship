@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   status: vi.fn(),
   redeploy: vi.fn(),
   cancel: vi.fn(),
+  respond: vi.fn(),
   toast: vi.fn(),
   ensure: vi.fn(), buildAccess: vi.fn(), getEnv: vi.fn(), pricing: vi.fn(),
   callbacks: {} as Record<string, (...args: any[]) => void>,
@@ -27,7 +28,13 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  deployApi: { getBuildStatus: api.status, buildRedeploy: api.redeploy, cancel: api.cancel, buildAccess: api.buildAccess },
+  deployApi: {
+    getBuildStatus: api.status,
+    buildRedeploy: api.redeploy,
+    cancel: api.cancel,
+    buildAccess: api.buildAccess,
+    buildRespond: api.respond,
+  },
   projectsApi: { ensure: api.ensure, getEnv: api.getEnv },
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => ({ showToast: api.toast }) }));
@@ -118,6 +125,90 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("held backup decisions", () => {
+  const prompt = (attempt: number) => ({
+    promptId: `backup:${attempt}`,
+    title: "Backup failed",
+    message: "The new release has not started.",
+    actions: [{ id: `retry:${attempt}`, label: "Retry backup" }],
+  });
+
+  it.each(["network error", "rejected choice"])(
+    "restores the prompt on refresh and retains it after a %s",
+    async (failure) => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await mount();
+      await load({ pendingPrompt: prompt(1) });
+      expect(build.state.pendingPrompt?.promptId).toBe("backup:1");
+      if (failure === "network error")
+        api.respond.mockRejectedValueOnce(new Error("Connection interrupted"));
+      else api.respond.mockResolvedValueOnce({ success: false });
+      await act(async () => {
+        await expect(build.respondToPrompt("retry:1")).rejects.toThrow();
+      });
+      expect(build.state.pendingPrompt?.promptId).toBe("backup:1");
+      api.respond.mockResolvedValueOnce({ success: true });
+      await act(async () => {
+        await build.respondToPrompt("retry:1");
+      });
+      expect(build.state.pendingPrompt).toBeNull();
+    },
+  );
+
+  it("does not clear the next backup failure when the previous response finishes late", async () => {
+    await mount();
+    await load({ pendingPrompt: prompt(1) });
+    let finish!: (value: { success: boolean }) => void;
+    api.respond.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const response = build.respondToPrompt("retry:1");
+    await act(async () => {
+      api.callbacks.onPrompt!(prompt(2));
+    });
+    await act(async () => {
+      finish({ success: true });
+      await response;
+    });
+    expect(build.state.pendingPrompt?.promptId).toBe("backup:2");
+  });
+
+  it("clears a held backup prompt when its unanswered deadline fails the deployment", async () => {
+    await mount();
+    await load({ pendingPrompt: prompt(1) });
+    await act(async () => {
+      api.callbacks.onFailure!("Backup decision timed out");
+    });
+    expect(build.state.pendingPrompt).toBeNull();
+    expect(build.state.deploymentFailed).toBe(true);
+  });
+
+  it("updates a decision answered in another tab even while the log stream remains connected", async () => {
+    await mount();
+    await load({ pendingPrompt: prompt(1) });
+    expect(api.stream.isConnected).toBe(true);
+    api.status.mockResolvedValue(snapshot({ pendingPrompt: prompt(2) }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(build.state.pendingPrompt?.promptId).toBe("backup:2");
+    api.status.mockResolvedValue(snapshot({ pendingPrompt: null }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(build.state.pendingPrompt).toBeNull();
+    expect(build.state.isDeploying).toBe(true);
+    api.status.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9000);
+    });
+    expect(api.status).not.toHaveBeenCalled();
+  });
 });
 
 it("retries capacity admission using the draft already created by the deployment wizard", async () => {

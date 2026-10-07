@@ -55,6 +55,7 @@
     "viewAllApps": "Tüm {count} uygulamayı gör →"
   },
   "nav": {
+    "support": "Destek",
     "scale": "Ölçeklendirme",
     "home": "Ana Sayfa",
     "new-project": "Yeni Proje",
@@ -76,6 +77,7 @@
     "addMailbox": "Posta kutusu ekle",
     "webmail": "Webmail",
     "sections": {
+      "help": "Yardım",
       "main": "Ana Menü",
       "settings": "Ayarlar",
       "infrastructure": "Altyapı",
@@ -83,7 +85,8 @@
       "delivery": "Teslimat",
       "system": "Sistem",
       "account": "Hesap"
-    }
+    },
+    "workspaces": "Çalışma alanları"
   },
   "sidebar": {
     "expand": "Kenar çubuğunu genişlet",

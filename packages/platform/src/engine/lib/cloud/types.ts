@@ -9,9 +9,19 @@ import type { DatabaseDump, SubgraphScope } from "@repo/db";
 import type { CloudPreflightData } from "../cloud-preflight";
 
 export interface CloudAccount {
+  id: string;
+  organizationId: string;
   name: string;
   email: string;
   image?: string | null;
+}
+
+/** Encrypted together so a credential cannot be reused with another target or tenant. */
+export interface StoredCloudSession {
+  token: string;
+  apiUrl: string;
+  userId: string;
+  organizationId: string;
 }
 
 /** Cached Oblien namespace token (the `oblien-ns-tokens` cacheStore). */
@@ -185,8 +195,10 @@ export interface CloudClient {
   ingestSubgraph(input: {
     dump: DatabaseDump;
     allowNonEmptyTarget?: boolean;
+    /** Require the retry-safe project promotion protocol. */
+    promotionId?: string;
   }): Promise<
-    | { ok: true; organizationId: string; publicUrl: string; imported: Record<string, number> }
+    | { ok: true; organizationId: string; publicUrl: string; imported: Record<string, number>; promotionId?: string }
     | { ok: false; error: string; code?: string; projectCount?: number }
   >;
   /**

@@ -161,7 +161,7 @@ describe("probeDeployedReadiness", () => {
 
     expect(verdict.failure).toBeNull();
     expect(verdict.skipped).toContain("refuses port forwarding");
-    expect(verdict.skipped).toContain("deployment host's SSH forwarding permissions");
+    expect(verdict.skipped).toContain("deployment host's control connection");
     expect(verdict.skipped).toContain("`curl` installation");
   });
 
@@ -195,7 +195,7 @@ describe("probeDeployedReadiness", () => {
 
     expect(verdict.failure).toBeNull();
     expect(verdict.skipped).toContain("read ECONNRESET");
-    expect(verdict.skipped).toContain("deployment host's SSH connection");
+    expect(verdict.skipped).toContain("deployment host's connection");
     expect(verdict.skipped).not.toContain("openship up");
     expect(withHostExecutor).not.toHaveBeenCalled();
   });

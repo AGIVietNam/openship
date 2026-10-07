@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const FROZEN_RELEASE_IMAGE = `ghcr.io/acme/app@sha256:${"b".repeat(64)}`;
 
@@ -23,6 +26,9 @@ const h = vi.hoisted(() => ({
   active: null as Record<string, unknown> | null,
   project: null as Record<string, unknown> | null,
   runtimeName: "docker",
+  localHost: false,
+  runtimeDisposed: false,
+  pathExists: vi.fn(),
   serviceImages: [] as Array<{ serviceId: string; serviceName: string; imageRef: string }>,
 }));
 
@@ -39,7 +45,8 @@ vi.mock("@repo/db", () => ({
   },
 }));
 
-vi.mock("@repo/adapters", () => {
+vi.mock("@repo/adapters", async (original) => {
+  const actual = await original<typeof import("@repo/adapters")>();
   class DockerRuntime {
     get name() { return h.runtimeName; }
 
@@ -52,10 +59,10 @@ vi.mock("@repo/adapters", () => {
       return h.imagePresent;
     }
 
-    async dispose(): Promise<void> {}
+    async dispose(): Promise<void> { h.runtimeDisposed = true; }
   }
 
-  return { DockerRuntime };
+  return { ...actual, DockerRuntime };
 });
 
 vi.mock("@repo/platform/engine/lib/deployment-runtime", async () => {
@@ -64,7 +71,16 @@ vi.mock("@repo/platform/engine/lib/deployment-runtime", async () => {
     // The production class intentionally has a private constructor; the mock
     // factory supplies a public test double at runtime, so instantiate it from
     // its prototype without weakening the production constructor contract.
-    resolveDeploymentRuntime: async () => ({ runtime: Object.create(DockerRuntime.prototype) }),
+    resolveDeploymentRuntime: async () => ({
+      runtime: Object.create(DockerRuntime.prototype),
+      localHost: h.localHost,
+      executor: { exists: h.pathExists },
+    }),
+    resolveServerExecutor: async () => {
+      if ((h.target?.meta as { deployTarget?: string })?.deployTarget === "cloud")
+        throw new Error("Managed servers require the deployment destination");
+      return { executor: { exists: h.pathExists }, isLocal: h.localHost };
+    },
   };
 });
 
@@ -73,11 +89,15 @@ vi.mock("@repo/platform/engine/modules/deployments/build.service", () => ({
   triggerDeployment: h.triggerDeployment,
 }));
 
-import { rollback } from "@repo/platform/engine/modules/deployments/rollback/rollback-orchestrator";
+import { resolveRestorePlan, rollback } from "@repo/platform/engine/modules/deployments/rollback/rollback-orchestrator";
 import { snapshotNeedsGitSource, withoutPinnedArtifacts } from "@repo/platform/engine/modules/deployments/pinned-artifacts";
 
 beforeEach(() => {
   h.runtimeName = "docker";
+  h.localHost = false;
+  h.runtimeDisposed = false;
+  h.pathExists.mockReset();
+  h.pathExists.mockResolvedValue(false);
   h.serviceImages = [];
   h.imagePresent = false;
   h.inspectedImages = [];
@@ -134,6 +154,60 @@ beforeEach(() => {
       imageTemplate: "ghcr.io/acme/app:changed-{tag}",
     },
   };
+});
+
+describe("static rollback inspects the selected deployment's filesystem", () => {
+  function staticTarget(path: string, deployTarget: "cloud" | "server" | "local") {
+    h.target!.containerId = path;
+    h.target!.imageRef = null;
+    h.target!.meta = {
+      workload: "static", runtimeMode: "bare", deployTarget,
+      ...(deployTarget === "local" ? {} : { serverId: "server-1" }),
+      staticServeOutputDir: "apps/site/out",
+    };
+  }
+
+  it.each(["cloud", "server"] as const)("finds retained files through the %s executor before disposing it", async target => {
+    const path = "/only-on-the-selected-server/releases/dep-target";
+    staticTarget(path, target);
+    h.pathExists.mockImplementation(async () => {
+      expect(h.runtimeDisposed).toBe(false);
+      return true;
+    });
+    const { plan } = await resolveRestorePlan("dep-target");
+    expect(plan).toMatchObject({ mode: "redeploy-pinned", handoverStaticDir: path });
+    expect(h.pathExists).toHaveBeenCalledExactlyOnceWith(path);
+    expect(h.runtimeDisposed).toBe(true);
+  });
+
+  it.each([false, "unreachable"])("never substitutes local files when the server reports %s", async result => {
+    const path = await mkdtemp(join(tmpdir(), "openship-remote-restore-"));
+    try {
+      staticTarget(path, "cloud");
+      if (result === "unreachable") h.pathExists.mockRejectedValue(new Error("server unreachable"));
+      const { plan } = await resolveRestorePlan("dep-target");
+      expect(plan).toMatchObject({ mode: "ineligible", code: "ROLLBACK_ARTIFACT_GONE" });
+      expect(h.pathExists).toHaveBeenCalledExactlyOnceWith(path);
+      expect(h.runtimeDisposed).toBe(true);
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a local static mount without needing the host SSH channel", async () => {
+    const path = await mkdtemp(join(tmpdir(), "openship-local-restore-"));
+    try {
+      staticTarget(path, "local");
+      h.localHost = true;
+      h.pathExists.mockRejectedValue(new Error("host channel disabled"));
+      expect((await resolveRestorePlan("dep-target")).plan)
+        .toMatchObject({ mode: "redeploy-pinned", handoverStaticDir: path });
+      expect(h.pathExists).not.toHaveBeenCalled();
+      expect(h.runtimeDisposed).toBe(true);
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("rollback — reacquire a frozen release image", () => {

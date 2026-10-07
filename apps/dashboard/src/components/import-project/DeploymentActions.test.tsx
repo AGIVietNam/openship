@@ -155,6 +155,22 @@ describe("shared deployment controls", () => {
     expect(host.textContent).not.toContain(copy.openSite);
   });
 
+  it("shows Stopping in the header until cancellation finishes, then enables redeploy", async () => {
+    deployment.deploymentStatus = "cancelled";
+    deployment.state.cancellationPending = true;
+    await render(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(copy.stopping);
+    expect(button(copy.stopping).disabled).toBe(true);
+    expect(button(copy.redeploy)).toBeUndefined();
+
+    deployment.state.cancellationPending = false;
+    await render(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(copy.status.cancelled);
+    expect(button(copy.redeploy).disabled).toBe(false);
+    await act(async () => button(copy.redeploy).click());
+    expect(redeploy).toHaveBeenCalledOnce();
+  });
+
   it("stops an active deployment and disables the action while stopping", async () => {
     deployment.deploymentStatus = "building";
     await render();

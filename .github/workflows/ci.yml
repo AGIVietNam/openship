@@ -44,7 +44,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
+          # Avoid scanning installed dependencies again during cache finalization.
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -80,12 +81,18 @@ jobs:
             command: bun run --cwd apps/api test --shard=2/2
           - suite: Database
             command: bun run --cwd packages/db test
+          - suite: Cloud Docker workspaces
+            command: >-
+              RUN_DOCKER_E2E=1 bun run --cwd apps/api test:e2e
+              test/e2e/cloud-build-capacity.e2e.test.ts
+              test/e2e/cloud-shared-workspace.e2e.test.ts
+              test/e2e/migration-direct-transfer.e2e.test.ts
+              test/e2e/migration-takeover.e2e.test.ts
+              test/e2e/backup-volume-roundtrip.e2e.test.ts
           # Run the rule guard with real CJSON, shared dictionaries and HTTP on
           # every PR. A missing daemon must fail, not silently skip this gate.
           - suite: Edge routing
             command: RUN_DOCKER_E2E=1 bun run --cwd apps/api test:e2e test/e2e/routing-rules.e2e.test.ts
-          - suite: Cloud build capacity
-            command: RUN_DOCKER_E2E=1 bun run --cwd apps/api test:e2e test/e2e/cloud-build-capacity.e2e.test.ts
           # Both suites rebuild the same native bundle. Keep them sequential on
           # their own runner; the other packages do not share that filesystem.
           - suite: SDK and CLI
@@ -104,13 +111,13 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Cache bun install
         uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 

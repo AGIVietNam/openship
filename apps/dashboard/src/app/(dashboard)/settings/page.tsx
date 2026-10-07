@@ -8,6 +8,7 @@ import { Icon as UiIcon } from "@repo/ui/icons";
  *
  * Tabs:
  *   - general        → appearance, build preferences, language, interface, preferences
+ *   - security       → authenticator 2FA, recovery codes and passkeys
  *   - tokens         → clone credentials, API access tokens
  *   - mcp             → MCP connection (endpoint + client config)
  *   - team           → organization members + invitations (moved from /members)
@@ -40,6 +41,8 @@ import { InstanceInfo } from "./_components/InstanceInfo";
 import { UntrackedEdgeRoutes } from "./_components/UntrackedEdgeRoutes";
 import { LanguageSetting } from "./_components/LanguageSetting";
 import { PreferencesSetting } from "./_components/PreferencesSetting";
+import { PasskeysSetting } from "./_components/PasskeysSetting";
+import { TwoFactorSetting } from "./_components/TwoFactorSetting";
 import { ProductViewSetting } from "./_components/ProductViewSetting";
 import { MailModeSetting } from "./_components/MailModeSetting";
 import { UpdatesTab } from "./_components/UpdatesTab";
@@ -72,7 +75,7 @@ export default function SettingsPage() {
 }
 
 function SettingsPageInner() {
-  const { selfHosted, deployMode, productView } = usePlatform();
+  const { selfHosted, deployMode, productView, authMode } = usePlatform();
   const { refresh } = useCloud();
   const { showToast } = useToast();
   const { t } = useI18n();
@@ -144,6 +147,13 @@ function SettingsPageInner() {
                   Renders nothing on the SaaS. */}
               <ProductViewSetting />
               <PreferencesSetting />
+            </>
+          )}
+
+          {activeTab === "security" && authMode === "local" && (
+            <>
+              <TwoFactorSetting />
+              <PasskeysSetting />
             </>
           )}
 

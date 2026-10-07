@@ -38,6 +38,7 @@ export interface DownloadTarballOptions {
   /** Remote directory to extract the tree into (recreated fresh). */
   destDir: string;
   onLog?: (log: LogEntry) => void;
+  signal?: AbortSignal;
 }
 
 /**
@@ -54,6 +55,7 @@ export async function downloadTarballOnRemote(
   executor: CommandExecutor,
   opts: DownloadTarballOptions,
 ): Promise<void> {
+  opts.signal?.throwIfAborted();
   const dest = sq(opts.destDir);
   const tmp = sq(`${opts.destDir}.opsh-src.tar.gz`);
   // Token via env keeps it out of curl's argv. The command still travels to the
@@ -65,8 +67,17 @@ export async function downloadTarballOnRemote(
     `curl -fSL --retry 3 --retry-delay 2 ${authHeader}-o ${tmp} ${sq(opts.url)} && ` +
     `tar -xzf ${tmp} --strip-components=1 -C ${dest} && rm -f ${tmp}`;
 
-  const { code } = await executor.streamExec(cmd, (entry) => opts.onLog?.(entry));
-  if (code !== 0) {
-    throw new Error(`tarball download exited with code ${code}`);
+  try {
+    const { code } = await executor.streamExec(cmd, (entry) => opts.onLog?.(entry), { signal: opts.signal });
+    opts.signal?.throwIfAborted();
+    if (code !== 0) throw new Error(`tarball download exited with code ${code}`);
+  } catch (error) {
+    // The partial archive is beside the context, so removing the context alone
+    // cannot reclaim it. Cleanup must also work inside an aborted caller scope.
+    const cleanup = () => executor.exec(`rm -f ${tmp}`, { timeout: 10_000 });
+    await (executor.runWithAbortSignal
+      ? executor.runWithAbortSignal(AbortSignal.timeout(10_000), cleanup)
+      : cleanup()).catch(() => {});
+    throw error;
   }
 }

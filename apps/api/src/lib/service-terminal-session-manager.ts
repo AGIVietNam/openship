@@ -9,9 +9,9 @@
  *
  * State is RAM-only on purpose:
  *   - Tickets are single-use, short-lived (default 30s).
- *   - Active sessions wrap live PTY streams (Docker exec / Oblien WS)
- *     that die with the process anyway. A boot-time sweep finalizes
- *     orphaned audit rows.
+ *   - Active sessions wrap live PTY streams. Managed-server admission and
+ *     command records survive a controller exit so recovery verifies remote
+ *     completion before releasing that server.
  */
 
 import { randomBytes } from "node:crypto";
@@ -20,6 +20,8 @@ import type { RuntimeAdapter, ShellSession } from "@repo/adapters";
 import { disposeRuntime } from "@repo/platform/engine/lib/deployment-runtime";
 import type { TerminalExitReason } from "@repo/db";
 import type { ExecutionContext as RequestContext } from "@repo/platform";
+import { safeErrorMessage } from "@repo/core";
+import type { CloudTerminalTicket } from "./cloud/terminal-bridge";
 
 // ─── Tickets ────────────────────────────────────────────────────────────────
 
@@ -32,6 +34,7 @@ interface Ticket {
   serviceId: string;
   expiresAt: number;
   used: boolean;
+  cloud?: CloudTerminalTicket;
 }
 
 const tickets = new Map<string, Ticket>();
@@ -43,6 +46,7 @@ function newToken(): string {
 export function issueServiceTerminalTicket(
   ctx: RequestContext,
   serviceId: string,
+  cloud?: CloudTerminalTicket,
 ): { token: string; expiresIn: number } {
   cleanupExpiredTickets();
   const ttl = env.TERMINAL_TICKET_TTL_MS;
@@ -54,13 +58,14 @@ export function issueServiceTerminalTicket(
     serviceId,
     expiresAt: Date.now() + ttl,
     used: false,
+    ...(cloud && { cloud }),
   });
   return { token, expiresIn: Math.floor(ttl / 1000) };
 }
 
 export function consumeServiceTerminalTicket(
   token: string,
-): { userId: string; organizationId: string; serviceId: string } | null {
+): { userId: string; organizationId: string; serviceId: string; cloud?: CloudTerminalTicket } | null {
   if (!token) return null;
   const ticket = tickets.get(token);
   if (!ticket) return null;
@@ -71,6 +76,7 @@ export function consumeServiceTerminalTicket(
     userId: ticket.userId,
     organizationId: ticket.organizationId,
     serviceId: ticket.serviceId,
+    ...(ticket.cloud && { cloud: ticket.cloud }),
   };
 }
 
@@ -102,6 +108,8 @@ export interface ActiveServiceSession {
    * that is a Docker-over-SSH loopback bridge per terminal opened.
    */
   runtime: RuntimeAdapter | null;
+  /** Managed admission includes unfinished Docker exec requests across reconnects. */
+  release?: () => Promise<void>;
   onTimeout: (sessionId: string, reason: TerminalExitReason) => void;
   lastActivityAt: number;
   idleTimer: ReturnType<typeof setTimeout>;
@@ -132,6 +140,7 @@ export function registerServiceSession(args: {
   shell: ShellSession;
   /** The runtime that opened `shell`; disposed when the session ends. */
   runtime?: RuntimeAdapter | null;
+  release?: () => Promise<void>;
   onTimeout: (sessionId: string, reason: TerminalExitReason) => void;
 }): ActiveServiceSession {
   const now = Date.now();
@@ -145,6 +154,7 @@ export function registerServiceSession(args: {
     startedAt: now,
     shell: args.shell,
     runtime: args.runtime ?? null,
+    release: args.release,
     onTimeout: args.onTimeout,
     lastActivityAt: now,
     closed: false,
@@ -275,7 +285,11 @@ export function unregisterServiceSession(sessionId: string): boolean {
   clearTimeout(session.hardCapTimer);
   // The one place every ending path converges (user close, remote exit, idle and
   // hard-cap timeouts all land here), so the shell's transport is released once.
-  disposeRuntime(session.runtime);
+  if (session.release) {
+    void session.release().catch(error => {
+      console.warn("[service-terminal] recovery pending:", safeErrorMessage(error));
+    });
+  } else disposeRuntime(session.runtime);
   session.runtime = null;
   session.scrollback = [];
   session.scrollbackSize = 0;

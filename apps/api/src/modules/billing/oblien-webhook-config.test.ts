@@ -17,6 +17,9 @@ describe("Oblien callback configuration", () => {
     expect(OBLIEN_WEBHOOK_EVENTS).toEqual(expect.arrayContaining([
       "payment.succeeded", "subscription.renewed", "subscription.past_due", "subscription.canceled", "subscription.updated",
       "entitlement.changed", "namespace.suspended", "namespace.restored",
+      "capacity.changed", "capacity.renewed", "capacity.expired", "capacity.payment_required", "capacity.revoked",
+      "network.topup_applied", "network.allowance.low", "network.allowance.depleted",
+      "storage.retention.payment_required", "storage.retention.paid",
     ]));
   });
 });

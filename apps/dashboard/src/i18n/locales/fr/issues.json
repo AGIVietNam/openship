@@ -60,6 +60,7 @@
   "fix": "Réparer",
   "install": "Installer",
   "update": "Mettre à jour",
+  "updating": "Mise à jour…",
   "mailSetup": "Configurer la messagerie",
   "selfUpdateNote": "Cette installation se met à jour depuis la ligne de commande.",
   "empty": {

@@ -6,6 +6,9 @@ description: Authenticate, select an installation, manage tokens, and call HTTP 
 The CLI stores named **contexts** in `~/.openship/config.json`. Each context contains an API URL,
 dashboard URL, and personal access token. One context is active at a time.
 
+Each command pins its connection settings for the entire invocation. Switching or updating a context
+in another terminal affects the next command, including while this command paginates, uploads or watches logs.
+
 ## Log in
 
 ```bash
@@ -36,6 +39,33 @@ openship logout --context production
 
 See the [context](/docs/cli/reference/context), [login](/docs/cli/reference/login), and
 [logout](/docs/cli/reference/logout) references for all options.
+
+## Select an organization
+
+```bash
+openship access workspaces
+openship --organization org_123 --json project list
+openship --organization org_123 init --project proj_123
+```
+
+`--organization` uses the SDK's fixed scope and requires a server that supports it. It never grants access
+the credential does not already have. Use the same organization option when deploying a link created
+with it. The native configuration selects its own organization.
+
+`access` also manages team workspaces, members, invitations and resource grants. See the
+[access reference](/docs/cli/reference/access). Changes use the platform's existing permission checks.
+
+## Store provider credentials
+
+```bash
+openship credential providers
+openship credential create registry.json
+openship credential list
+openship credential verify credential_123
+```
+
+The JSON file contains `provider`, `name`, optional `selector`, and provider `values`. Provider discovery
+describes the required fields. Reads return masked secrets; verification failures exit nonzero.
 
 ## Create a token
 

@@ -43,7 +43,7 @@ const HIDE_BUTTON =
 interface CardProps {
   issues: SystemIssue[];
   /** Id of the row whose fix is currently running, if any. */
-  busyId?: string | null;
+  busyIds?: ReadonlySet<string>;
   onResolve: (issue: SystemIssue) => void;
   onInfraFix: (issue: SystemIssue) => void;
   /**
@@ -61,7 +61,7 @@ function AttentionCard({
   subtitle,
   max,
   issues,
-  busyId,
+  busyIds,
   onResolve,
   onInfraFix,
   onHide,
@@ -118,7 +118,7 @@ function AttentionCard({
           <IssueRow
             key={issue.id}
             issue={issue}
-            busy={busyId === issue.id}
+            busy={busyIds?.has(issue.id) ?? false}
             onResolve={onResolve}
             onInfraFix={onInfraFix}
           />

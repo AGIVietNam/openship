@@ -15,7 +15,7 @@ export function faq(pricing: CloudPricing): FaqItem[] {
         ladder
           ? `Plans are ${ladder}, ${UI.billedMonthly}.`
           : "See your dashboard for current Cloud plans and availability.",
-        "Each plan covers your organization, with no per-seat fees. A paid plan is required to deploy on Cloud.",
+        "Each subscription includes one managed server for your projects, with no per-seat fees. Choose a plan and deploy; Openship handles server setup.",
         pricing.customTiers.length > 0
           ? "Enterprise limits and pricing are agreed with sales."
           : null,
@@ -24,16 +24,16 @@ export function faq(pricing: CloudPricing): FaqItem[] {
         .join(" "),
     },
     {
-      q: "How do usage credits work?",
-      a: "Each billing cycle includes the credits shown on your plan. Apps and builds use the same balance, and how long it lasts depends on your workload. Continuous hosting can require top-ups. Extra credits extend usage without changing your resource limits.",
+      q: "What does a monthly server include?",
+      a: "A monthly server covers its purchased CPU, RAM and disk for the entire paid period. Your apps and builds share those resources, with no second compute-credit allowance. Managed proxy transfer and backups are separate. Existing subscriptions keep their saved terms, shown in Billing.",
     },
     {
       q: "How is capacity shared?",
-      a: "The shared CPU, RAM, and disk pool is your organization's total capacity. Each service must also fit its per-service limit. Adding projects or services does not multiply that allowance. Your dashboard shows allocations and remaining capacity.",
+      a: "Your projects and builds share the managed server’s CPU, RAM and disk. Container limits do not allocate another machine or disk. Your dashboard shows actual usage separately from purchased capacity; add another subscribed server when you need a separate pool.",
     },
     {
       q: "Can I change or cancel my plan?",
-      a: "You can cancel renewal from Billing and keep access until the end of your paid period. A plan change starts a new full-price billing cycle, without automatic proration or a refund of the previous cycle. Review the details before checkout.",
+      a: "Cancel renewal from Billing and keep access until the end of your paid period. Upgrades use the provider’s prorated price and apply after payment. Resource reductions and billing-mode changes start at renewal. Review the amount due, effective date and any server restarts before confirming. Retained disks can incur storage charges after coverage ends until they are deleted.",
     },
     {
       q: "Is self-hosting really free?",

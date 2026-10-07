@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -16,12 +16,17 @@ import {
   getFolderSession,
 } from "@repo/platform/engine/modules/projects/folder/session-store";
 import type { FolderSessionResult } from "@repo/contracts";
+import { repos } from "@repo/db";
+import { env } from "@repo/platform/engine/config/env";
 
 installFakeRunner();
 const app = new Hono().onError(handleApiError).route("/api/projects", projectRoutes);
 const sessions: string[] = [];
 let root: string, scratch: string, origin: string;
 let owner: SeededOwner;
+let otherOwner: SeededOwner;
+let managedServerId: string;
+const originalCloudMode = env.CLOUD_MODE;
 let server: ReturnType<typeof serve>;
 let archive: Buffer, digest: string;
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -47,6 +52,9 @@ beforeAll(async () => {
   }
   expect(archive.byteLength).toBeGreaterThan(10 * 1024 * 1024);
   owner = await seedOwner();
+  otherOwner = await seedOwner();
+  const managed = await repos.cloudWorkspace.create({ organizationId: owner.orgId, name: "Upload destination" });
+  managedServerId = (await repos.server.findByWorkspace(managed.id, owner.orgId))!.id;
   server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
   await once(server, "listening");
   const address = server.address();
@@ -55,6 +63,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterEach(async () => {
+  env.CLOUD_MODE = originalCloudMode;
   for (const id of sessions.splice(0)) {
     const session = deleteFolderSession(id);
     if (session?.stagingDir) await rm(session.stagingDir, { recursive: true, force: true });
@@ -75,7 +84,7 @@ async function open() {
   const response = await fetch(`${origin}/api/projects/folder/session`, {
     method: "POST",
     headers: { ...owner.auth, "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(env.CLOUD_MODE ? { serverId: managedServerId } : {}),
   });
   expect(response.status).toBe(200);
   const target = (await response.json()) as FolderSessionResult;
@@ -106,7 +115,8 @@ function upload(target: FolderSessionResult, bytes = archive, chunked = false) {
   } as RequestInit);
 }
 
-describe("authenticated folder upload over HTTP", () => {
+describe.each([false, true])("authenticated folder upload over HTTP (Cloud: %s)", (cloudMode) => {
+  beforeEach(() => { env.CLOUD_MODE = cloudMode; });
   it.each([false, true])("preserves every byte above 10 MiB (chunked: %s)", async (chunked) => {
     const target = await open();
     const response = await upload(target, archive, chunked);
@@ -148,5 +158,19 @@ describe("authenticated folder upload over HTTP", () => {
     const session = getFolderSession(target.sessionId)!;
     expect(session.uploaded).toBe(false);
     expect(await readdir(session.stagingDir!)).toEqual([]);
+  });
+  it("rejects another organization and invalid upload tickets without staging bytes", async () => {
+    const target = await open();
+    for (const headers of [
+      { ...otherOwner.auth, ...target.upload.headers },
+      { ...owner.auth, ...target.upload.headers, "x-upload-ticket": "wrong-ticket" },
+    ]) {
+      const response = await fetch(target.upload.absoluteUrl, { method: "POST", headers, body: new Blob([new Uint8Array(archive)]) });
+      expect([403, 404]).toContain(response.status);
+      await response.body?.cancel();
+      const session = getFolderSession(target.sessionId)!;
+      expect(session.uploaded).toBe(false);
+      expect(await readdir(session.stagingDir!)).toEqual([]);
+    }
   });
 });

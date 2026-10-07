@@ -7,6 +7,21 @@
  * rather than `node:crypto`, so bundling it into the browser doesn't break.
  */
 
+/** Sort JSON object keys recursively while preserving array order. Code-unit
+ * sorting keeps configuration comparisons and checksums stable across locales. */
+export function sortJsonKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonKeys);
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .map((key) => [key, sortJsonKeys(record[key])]),
+    );
+  }
+  return value;
+}
+
 /** URL-safe base64 of raw bytes, no `node:crypto`/Buffer dependency. */
 function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";

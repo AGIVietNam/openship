@@ -29,6 +29,7 @@ openship deployment|deployments [options] [command]
 | [`keep <id>`](/docs/cli/reference/deployment#openship-deployment-keep) | Keep a finished deployment awaiting a keep/reject decision |
 | [`pending <id>`](/docs/cli/reference/deployment#openship-deployment-pending) | Show a deployment's current prompt and pending decisions |
 | [`respond [options] <id>`](/docs/cli/reference/deployment#openship-deployment-respond) | Answer a pending deployment prompt |
+| [`wait [options] <id>`](/docs/cli/reference/deployment#openship-deployment-wait) | Wait for the persisted deployment outcome or a decision that needs your response |
 | [`rm [options] <id>`](/docs/cli/reference/deployment#openship-deployment-rm) | Delete a deployment |
 | [`ssl`](/docs/cli/reference/deployment#openship-deployment-ssl) | SSL certificate operations |
 
@@ -258,3 +259,20 @@ openship deployment usage [options] <id>
 | Argument | Meaning |
 | --- | --- |
 | `id` | Deployment ID |
+
+## openship deployment wait
+
+Wait for the persisted deployment outcome or a decision that needs your response
+
+```text
+openship deployment wait [options] <id>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `id` | Deployment ID |
+
+| Option | Meaning |
+| --- | --- |
+| `--timeout <ms>` | Maximum wait duration; leaves the deployment running on timeout (default: 600000) |
+| `--interval <ms>` | Status polling interval (minimum 10 ms) (default: 1000) |

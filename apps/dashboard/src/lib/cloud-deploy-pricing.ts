@@ -92,12 +92,14 @@ export type CloudDeployRecovery = "subscribe" | "upgrade" | "credits" | "payment
 /** A fresh billing snapshot selects the recovery, never authorizes a deployment.
  * The next Deploy still passes every server-side quota and resource check. */
 export function cloudDeployRecovery(state: BillingState, restriction: CloudDeployRestriction): CloudDeployRecovery {
-  if (state.status === "credit_exhausted" && !state.overQuota) return "paused";
+  const monthly = state.compute?.billingMode === "monthly";
+  if (monthly && !state.compute!.covered) return "payment";
+  if (state.status === "credit_exhausted" && (monthly || !state.overQuota)) return "paused";
   // A free account can also hit a Cloud subdomain limit while deploying to its
   // own server. Preserve that reason instead of implying local compute is paid.
   if (state.tier === "free") return restriction.code === "PLAN_UPGRADE_REQUIRED" && restriction.reason !== "project-limit" ? "upgrade" : "subscribe";
-  if (!["active", "trialing", "credit_exhausted"].includes(state.status)) return "payment";
+  if (!monthly && !["active", "trialing", "credit_exhausted"].includes(state.status)) return "payment";
   if (restriction.code === "PLAN_UPGRADE_REQUIRED") return "upgrade";
-  if (state.overQuota) return "credits";
+  if (!monthly && state.overQuota) return "credits";
   return "ready";
 }

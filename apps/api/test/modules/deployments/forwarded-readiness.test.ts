@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Duplex } from "node:stream";
+import { createServer } from "node:http";
 import {
   buildHostProbeCommand,
   isForwardingProhibited,
@@ -7,7 +8,7 @@ import {
   waitForForwardedReady,
   waitForReadyFromExecutor,
 } from "@repo/platform/engine/modules/deployments/forwarded-readiness";
-import type { CommandExecutor } from "@repo/adapters";
+import { LocalExecutor, type CommandExecutor } from "@repo/adapters";
 
 function response(status: number): Duplex {
   let sent = false;
@@ -248,6 +249,54 @@ function executorWith(opts: {
 }
 
 describe("waitForReadyFromExecutor", () => {
+  it("probes a managed server through its executor when TCP forwarding is unavailable", async () => {
+    const exec = vi.fn(async () => "OPENSHIP_PROBE 204 1");
+    const result = await waitForReadyFromExecutor(
+      executorWith({ exec }), "127.0.0.1", 20_000,
+      { path: "/ready", timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ ready: true, via: "exec" });
+    expect(exec).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("'http://127.0.0.1:20000/ready'"),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+  });
+
+  it("cannot accept a healthy controller port as proof that a remote app is ready", async () => {
+    const server = createServer((_request, response) => { response.end("controller"); });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const exec = vi.fn(async () => "OPENSHIP_PROBE 503 1");
+      const result = await waitForReadyFromExecutor(
+        executorWith({ exec }), "127.0.0.1", port,
+        { path: "/ready", timeoutMs: 20, intervalMs: 1 },
+      );
+      expect(result).toEqual({ ready: false, via: "exec" });
+      expect(exec).toHaveBeenCalled();
+
+      // The same address belongs to this machine only for an explicit local executor.
+      expect(await waitForReadyFromExecutor(new LocalExecutor(), "127.0.0.1", port, {
+        path: "/ready", timeoutMs: 500,
+      })).toEqual({ ready: true, via: "socket" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    ["missing HTTP client", async () => "OPENSHIP_PROBE_NO_CLIENT", "no `curl`"],
+    ["lost provider connection", async () => { throw new Error("provider unavailable"); }, "provider unavailable"],
+  ] as const)("reports a managed server's %s as unverified", async (_label, exec, detail) => {
+    const result = await waitForReadyFromExecutor(
+      executorWith({ exec }), "127.0.0.1", 20_000,
+      { path: "/ready", timeoutMs: 50 },
+    );
+    expect(result).toEqual({ ready: false, via: "exec", unverifiable: expect.stringContaining(detail) });
+  });
+
   it("uses the forwarded channel when the server allows it", async () => {
     const exec = vi.fn();
     const unsubscribe = vi.fn();

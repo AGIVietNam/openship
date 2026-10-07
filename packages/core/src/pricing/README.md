@@ -1,149 +1,135 @@
-# Openship reseller catalog
+# Openship server pricing
 
-`pricing.json` defines retail prices, metered credit allowances, application limits,
-VM limits and combined namespace capacity. `GET /api/billing/plans` supplies the
-same catalog to the dashboard, marketing and linked installations. Checkout uses
-a generic Oblien offer; the subscription belongs to the customer's namespace.
-The Enterprise reseller owner receives wallet funding and keeps its own plan.
+`pricing.json` defines Openship retail prices, supported Custom sizes and application
+limits. The API serves those terms through `GET /api/billing/plans`; dashboard,
+website and linked installations share the catalog. Oblien owns provider pricing,
+payment settlement, resource admission, metering and paid coverage.
 
-## Version 6 offers
+## Monthly server offers (v10)
 
-| Plan | Monthly price | Included credits | Shared CPU / RAM / disk | Per service: CPU / RAM | Projects | Service slots |
-| --- | ---: | ---: | --- | --- | ---: | ---: |
-| Hobby | $5 | 400 | 1 / 4 GB / 25 GB | 1 / 2 GB | 3 | 1 |
-| Starter | $20 | 1,700 | 2 / 6 GB / 32 GB | 2 / 3 GB | 10 | 3 |
-| Pro | $39 | 3,500 | 4 / 8 GB / 128 GB | 4 / 4 GB | 50 | 10 |
-| Scale | $99 | 9,000 | 8 / 16 GB / 256 GB | 8 / 8 GB | No set limit | 50 |
+| Plan | Monthly price | vCPU | RAM | Disk | Managed servers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hobby | $5 | 1 | 2 GiB | 40 GiB | 1 |
+| Starter | $20 | 2 | 8 GiB | 128 GiB | 1 |
+| Pro | $39 | 4 | 16 GiB | 250 GiB | 1 |
+| Scale | $99 | 8 | 32 GiB | 600 GiB | 1 |
 
-CPU values are vCPU. New retail offers allow one service up to the full shared
-CPU pool and half the shared RAM. `limits.maxServiceResources` records that ceiling explicitly,
-including custom sizes; it does not change machine presets or workload defaults.
-Version 5 lowered Pro to $39/month. Version 6 raises Hobby storage to 25 GB and
-lets a Starter workspace use its 32 GB storage pool, so upgrading from Hobby does
-not require a smaller disk. Included credits, project/service counts and other
-capacity limits retain their v4 values.
+Each subscription covers its server's CPU, RAM and storage for the full paid
+month, without a second compute-credit allowance. CPU is shared vCPU, not a
+reserved physical core. Projects and services share the purchased resources,
+including the operating system and Docker. There is no project/service count
+limit or separate build-minute cap on new offers. One service can use the whole
+pool; optional container limits do not reserve another VM. Source builds run on
+the same host using measured headroom and the shared execution/activity locks.
+Another server requires its own namespace and subscription.
 
-| Plan | Workspace count | Per VM: vCPU / RAM / disk |
-| --- | ---: | --- |
-| Hobby | 1 | 1 / 4 GB / 25 GB |
-| Starter | 3 | 2 / 6 GB / 32 GB |
-| Pro | 6 | 4 / 8 GB / 32 GB |
-| Scale | 12 | 8 / 12 GB / 64 GB |
+Monthly servers include the provider's managed internet-transfer benefit. Read
+`capacity.network` for its allowance and explicit unlimited flag; do not derive
+it from CPU counts or rewrite saved compute tariffs. Public app routes and
+backups are separate. Expired disks are retained for at least 30 days with no automatic deletion;
+retained storage remains billable until deletion. The UI discloses provider
+retention terms and amounts due instead of treating them as compute credits.
 
-Hobby includes a finite allowance for light use. A continuously running Docker
-host can need top-ups; $5 does not buy an unlimited always-on VM.
+## PAYG resource tiers
 
-All limits apply together. Workspace/service counts do not promise that every
-workspace or container can use its maximum size at the same time. CPU is shared
-virtual CPU quota, not a dedicated physical core. An unpaid namespace has zero
-workspace and total capacity. Enterprise remains contact-sales; only a verified
-contract or audited operator grant can select it.
+`pricing.json#payg` owns the PAYG resource tiers and suggested credit packages.
+The API publishes this catalog as `GET /api/billing/plans` → `payg`; the dashboard
+must not derive customer tiers from the reseller owner's Oblien account plan.
 
-At Oblien's current 100 credits/USD wallet rate, these payments fund 500 / 2,000 / 3,900 /
-9,900 wallet credits. The namespace allowances stay below that funding. Catalog
-validation rejects unfunded retail allowances, top-ups and inherited retail
-capacity. Oblien-admin promotions explicitly account for any promotional subsidy;
-they are not an unrecorded enlargement of the namespace allowance.
+| Tier | Credit purchases to unlock | Pool vCPU | Pool RAM | Pool disk | Servers |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | $5 | 2 | 8 GiB | 64 GiB | 2 |
+| 2 | $20 | 4 | 16 GiB | 128 GiB | 4 |
+| 3 | $50 | 8 | 32 GiB | 256 GiB | 8 |
 
-Openship uses **milli-credits** internally: 1,000 milli-credits = one Oblien credit.
-`billing.creditsPerCycle` and offers use whole credits; API `monthlyCredits`,
-`annualCredits` and `credits_milli` use milli-credits. Credits are not minutes.
-Oblien meters CPU, memory and transfer; its active rate card defines the billed dimensions. Current workspace billing does not charge disk I/O.
-Neither a resource ceiling nor a credit grant promises continuous full-load
-runtime for the entire month. New paid plans have no additional fixed build-minute
-allowance; builds consume the same metered credits as applications.
+These are Openship pool allowances shared across servers, not monthly prices or
+provider account upgrades. Unlocking is based on cumulative verified credit
+purchases, not the declining spendable balance. One server may use the whole
+pool within effective provider limits. Adding servers does not multiply it.
+Usage rates and credit conversion remain provider-owned.
 
-Top-ups are 400 credits for $5, 1,700 for $20 and 4,500 for $50. They add purchased
-credits without resetting consumption or changing capacity, grace, service limits
-or the subscription. Only unused purchased credits carry to a later paid cycle.
-Checkout idempotency includes the versioned offer reference, so a changed pack
-price cannot replay an old quote accidentally. Older accepted orders retain
-their saved amounts.
+The current PAYG surface previews this catalog and validates proposed allocations.
+It does not grant access, change namespaces or activate checkout. Persisted
+customer funding and runtime entitlement must be integrated before selling PAYG;
+the preview's package selection is never payment evidence.
 
-Grace is zero by default. `overdraft` and `suspendThreshold` can be explicitly
-configured together; suspension cannot precede the blocking threshold. The
-provider balance already includes grace. Annual checkout stays disabled until an
-annual price and explicit funded annual allowance are published.
+## Provider checkout and authority
 
-## Capacity enforcement
+New purchases use the existing tracked `/billing/checkout` flow:
 
-- `max_workspaces` limits the allocated count, including build workspaces.
-- `max_vcpus`, `max_ram_mb`, `max_disk_gb` limit one VM.
-- `max_total_vcpus`, `max_total_ram_mb`, `max_total_disk_gb` limit the combined
-  namespace allocation, including stopped VMs, managed disks and pending resizes.
-- Application project/service counts and per-container CPU/RAM are enforced by
-  Openship. The underlying VM and namespace pools are enforced by Oblien, even
-  when a caller uses the provider API directly.
+- `kind: "subscription"`, `billingInterval: "monthly"`;
+- `offer.billingMode: "monthly"`, `offer.credits: 0`, no credit policy;
+- explicit `offer.capacity` and all seven `resourceLimits` fields;
+- the versioned reference plus server-derived organization, namespace and limits.
 
-Openship submits its chosen policy; it does not calculate the owner's remaining
-capacity. Oblien intersects configured, paid, account and platform limits and
-reserves capacity atomically on create/resize. `readCloudCapacity` supplies the
-dashboard with provider allocations instead of estimating them from services.
+The subscription remains `tierId: "reseller"`; its entitlement is `tierId: "capacity"`.
+Openship checks the embedded capacity's namespace, provider, pool and paid period
+against the saved subscription before exposing access. Billing admission uses the
+provider's `blocking` flag. Empty legacy quotas or an empty owner wallet cannot
+cancel confirmed monthly compute; manual suspension and expiry still apply.
 
-Service slots include enabled services in deployed projects, active containers,
-and accepted deployment reservations. Saving an undeployed draft consumes no
-service slots. Reservations remain until activation or worker cleanup finishes;
-redeploying the same service does not consume a second slot.
+Checkout returns are not proof of payment. Confirmation requires the specific
+checkout's completed fulfillment and matching live subscription. Monthly checkout
+legitimately grants zero namespace credits, so the UI verifies committed monthly
+coverage. Metered subscriptions and top-ups still require their delivered credits.
+Fully discounted, fulfilled purchases use the same checks. Pending, refunded,
+disputed or superseded payments never show a successful new subscription.
 
-An image-only Compose app gets only its service allocation plus Docker/OS room:
-a default 0.5-vCPU / 512 MB service uses a 0.5-vCPU / 1 GB host with an 8 GB disk.
-Runtime and source builds share the same pool. The SaaS engine reads Oblien's
-effective limits and allocated usage before choosing temporary build CPU/RAM;
-saved build settings are upper limits, and an unset setting uses available
-headroom. It protects the runtime allocation and does not borrow pending savings.
-After deployment, verified running container
-limits determine whether CPU/RAM can be released under the project runtime lock.
-Disks never shrink automatically. Unknown/unbounded containers prevent automatic
-downsizing. Captured running services are restored after a resize; intentionally
-stopped services stay stopped.
+`GET /billing/capacity/catalog` advertises deployed purchase capabilities and rates.
+Openship uses `oblien@2.10.0` and the existing SDK transport. Missing monthly Stripe
+support stops new sales without hiding existing subscription management. Provider
+price admission stays at Oblien; Openship does not copy its affordability or
+proration calculation into another pricing engine.
 
-## Existing subscriptions and upgrades
+The published provider tariff currently exceeds Hobby, Starter and Pro retail
+prices. The company has chosen to keep those retail prices and arrange its tariff
+with Oblien. See [the provider handoff](../../../../docs/cloud-capacity-economics.md).
+An accepted tariff and real settlement still need verification before release.
 
-`openship:<tier>:v6` saves the price, credits, grace, application limits and all
-seven capacity fields. Renewals use that snapshot, even after catalog edits.
-Unknown versions, missing v2–v6 capacity fields and organization/namespace mismatches
-fail closed. Price and credit metadata never come from browser input.
+## Custom resources and plan changes
 
-Saved v2/v3/v4/v5 subscriptions retain their original price, credits and capacity snapshot,
-including the $40 price on existing v4 Pro subscriptions. New v5 offers use a
-distinct checkout reference so retries cannot reuse the older price.
-Version 6 raises Hobby's per-workspace and total storage limit from 16 GB to
-25 GB and Starter's per-workspace storage limit from 16 GB to its existing 32 GB
-pool. Prices, credits, other allowances and saved subscriptions are unchanged.
-Snapshots without `maxServiceResources` retain their purchased `maxResourceTier`
-ceiling. There is no automatic uplift or rewrite of existing paid subscriptions;
-any adjustment is an explicit operator action. Unchanged top-ups retain v3 references.
-The new Hobby tier exists from v3: a legacy provider `hobby` subscription still
-maps to its original Openship Starter tier, never to the new $5 plan.
+Custom reuses the same subscription and resize flow. Retail additions remain
+$5 per extra vCPU, $2.50 per extra GiB RAM and $0.10 per extra GiB disk. The quote
+compares every preset plus additions and selects the least expensive bundle.
+For example, 1 vCPU / 2 GiB / 50 GiB costs $6; 3 vCPU / 12 GiB / 80 GiB costs
+$35. A bundle discount does not enlarge the selected server. Custom starts at
+2 GiB RAM, matching Hobby. Current Custom CPU
+selection stops at the provider's 12-vCPU per-VM ceiling.
 
-Legacy v1 offers left VM sizes inherited from the Enterprise owner. Reconciliation
-retains their pre-v4 safety ceilings, including 2 vCPU per Pro VM and 4 vCPU per
-Scale VM, while preserving paid price, credits, period and history. Pre-reseller
-subscriptions also keep those CPU ceilings. Tighter saved limits remain in force.
-Existing allocations above a new ceiling are not destroyed; downsize CPU/RAM or
-remove/migrate resources before adding more. The older API patch shape preserves
-the new total fields, so a prior client cannot erase them by omission.
+`GET /api/billing/subscription/quote` returns the retail price and a fingerprint
+of the complete terms. Checkout accepts only the selected resources and that
+fingerprint, then recalculates the retail offer on the server. `custom-v2` saves
+monthly capacity and zero credits. Oblien still validates provider funding and
+physical admission; a local retail quote does not purchase coverage.
 
-A paid plan change starts a new full-price cycle and replaces only that namespace's
-subscription. It does not prorate or automatically refund the previous cycle.
-Credit deposits cannot unlock a more expensive hardware tier. Invoice, renewal,
-refund, webhook and owner-wallet settlement remain provider-managed.
+Existing subscriptions use the provider's plan-change preview and confirmation,
+never another replacement checkout. The UI shows its amount due, effective date
+and affected projects. Pure funded upgrades apply after payment. Resource
+reductions and billing-model changes wait for renewal, even when retail price
+increases. Openship uses the returned direction and date without local proration.
+The durable worker applies the approved resize once. Changed project membership
+requires a fresh restart review. Disk shrinking remains unavailable.
 
-## Provider and rollout
+## Saved contracts and metered compatibility
 
-Deploy Oblien's API first. `/billing/catalog` must report `contractVersion >= 2`,
-`offerPolicy`, `resourceLimits`, `effectiveResourceLimits` and
-`aggregateResourceLimits` all enabled. Then deploy the Openship API and dashboard
-together. Checkout/readiness fail closed when total enforcement is missing;
-existing portal and cancellation actions remain available.
+Renewals use saved prices, resource limits, periods and billing mode. A catalog
+edit never rewrites paid terms. Existing v9 monthly subscriptions keep their
+original RAM and disk allocation; adopting v10 uses an explicit plan change.
+Older v1–v8 and `custom-v1` metered offers retain
+their finite allowances; they can adopt monthly capacity through the explicit
+provider plan-change flow at renewal. Older incomplete v1 snapshots retain their
+existing safety ceilings. Unknown references or ownership mismatches fail closed.
 
-Openship uses published `oblien@2.5.0` transport and validates the new response
-fields locally. Its existing log cancellation patch is carried forward to 2.5.0;
-do not remove it until using a release with the upstream cancellation fix.
-SDK 2.6.0 adds that fix and exported total-capacity types for other integrations;
-Openship does not depend on an unpublished package. Admin-created promotions use
-the exact hosted URL returned by Oblien. Campaign helpers and legacy Stripe price
-IDs do not define reseller checkout prices.
+Only eligible metered subscriptions expose credit packs and exhaustion warnings.
+They retain the existing allowance, signed webhook and renewal code. Internally,
+1,000 milli-credits equal one Oblien credit; these units never represent minutes.
+New monthly servers cannot be fabricated with the operator's complimentary-credit
+grant command. Previously saved grants can still be inspected, reused and revoked.
 
-See [capacity economics](../../../../docs/cloud-capacity-economics.md) and
-[Cloud release gate](../../../../docs/openship-cloud-launch.md).
+PAYG displays the published active-vCPU-hour, reserved-GiB-hour, retained-GiB-month
+and managed-proxy rates. Customer PAYG checkout remains unavailable: the deployed
+capacity confirmation spends the reseller wallet, not a customer-specific funded
+balance. No purchase button is enabled for that flow.
+
+See [the Cloud release gate](../../../../docs/openship-cloud-launch.md) for payment,
+renewal, isolation and deployment acceptance requirements.

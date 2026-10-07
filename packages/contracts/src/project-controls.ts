@@ -268,6 +268,7 @@ const driftBase = {
   supported: Type.Literal(true),
   behind: Type.Boolean(),
   latestInProgress: Type.Boolean(),
+  inProgressDeploymentId: Type.Optional(nullableString),
 };
 export const ProjectDriftSchema = Type.Union([
   Type.Object({ supported: Type.Literal(false) }),

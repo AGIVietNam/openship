@@ -6,7 +6,7 @@ import { faq } from "./_data";
 const PAGE_URL = "https://openship.io/pricing";
 export const revalidate = 60;
 const DESCRIPTION =
-  "Compare Openship Cloud plans for managed builds, hosting, and domains. Clear resource limits and usage credits for your whole team.";
+  "Compare Openship Cloud managed servers. Monthly CPU, RAM and storage for your projects, with clear resource limits and no per-seat fees.";
 export const metadata: Metadata = {
   title: "Pricing",
   description: DESCRIPTION,

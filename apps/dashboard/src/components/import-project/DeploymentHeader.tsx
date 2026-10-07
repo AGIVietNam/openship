@@ -21,18 +21,21 @@ export function DeploymentHeader({
   const copy = t.importProject.deploymentProcessing;
   const projectId = state.projectId || config.projectId;
   const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
-  const working = deploymentStatus === "building" || deploymentStatus === "deploying";
-  const status = decisionPending
-    ? t.importProject.composeDeployment.title.actionRequired
-    : deploymentStatus === "cancelled"
-      ? copy.status.cancelled
-      : deploymentStatus === "failed"
-        ? copy.status.failed
-        : hasWarning
-          ? copy.status.readyWarnings
-          : deploymentStatus === "ready"
-            ? copy.status.ready
-            : t.importProject.serviceStatus[deploymentStatus];
+  const stopping = state.isStopping || state.cancellationPending;
+  const working = stopping || deploymentStatus === "building" || deploymentStatus === "deploying";
+  const status = stopping
+    ? copy.stopping
+    : decisionPending
+      ? t.importProject.composeDeployment.title.actionRequired
+      : deploymentStatus === "cancelled"
+        ? copy.status.cancelled
+        : deploymentStatus === "failed"
+          ? copy.status.failed
+          : hasWarning
+            ? copy.status.readyWarnings
+            : deploymentStatus === "ready"
+              ? copy.status.ready
+              : t.importProject.serviceStatus[deploymentStatus];
   const tone =
     decisionPending || hasWarning
       ? "bg-warning-bg text-warning"
@@ -84,6 +87,7 @@ export function DeploymentHeader({
               {config.projectName || config.repo || t.projects.detail.projectFallback}
             </h1>
             <span
+              role="status"
               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${tone}`}
             >
               <UiIcon

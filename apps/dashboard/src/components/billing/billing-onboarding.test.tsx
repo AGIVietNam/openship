@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLANS, pricingUi } from "@repo/core";
 import { I18nProvider } from "@/components/i18n-provider";
 import { ModalProvider } from "@/context/ModalContext";
+import { PlatformProvider } from "@/context/PlatformContext";
 import { baseDictionary } from "@/i18n";
 import type { BillingState } from "@/lib/api/billing";
+import type { BillingPlanChange, BillingPlanChangeQuote } from "@repo/contracts";
+import { ApiError } from "@/lib/api/client";
 import { isNewCloudCustomer } from "@/lib/billing-presentation";
-import { BillingSidebar, InvoicesPanel, PaymentMethodPanel } from "@/app/(dashboard)/billing/_components/billing-shared";
+import { BillingPlanSummary, BillingSidebar, BillingPaymentsPanel } from "@/app/(dashboard)/billing/_components/billing-shared";
 import { BillingOverview } from "./BillingOverview";
 import { BillingCapacity } from "./BillingCapacity";
+import { BillingComputeCoverage } from "./BillingComputeCoverage";
 import { PlanResources } from "./PlanResources";
 import { PlanUsageNote } from "./PlanUsageNote";
 import { BillingResourceUsage } from "./BillingResourceUsage";
@@ -19,11 +23,16 @@ import { ResourceMeter } from "./ResourceMeter";
 import { BillingTopups } from "./BillingTopups";
 import { BillingUsage } from "./BillingUsage";
 import { CloudPlanPicker } from "./CloudPlanPicker";
+import { BillingWorkspaceProvider } from "./BillingWorkspaceContext";
+import { SubscriptionChangeStatus } from "./SubscriptionChangeStatus";
 import { CloudHomePlanCard } from "./CloudHomePlanCard";
 import type { ApiPlan } from "./PricingCards";
+import { monthlyCompute } from "../../../test/helpers/monthly-billing";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), usage: vi.fn() }));
+vi.mock("@/lib/api/system", () => ({ systemApi: { serverUsage: mocks.usage } }));
 vi.mock("@/lib/api/client", async original => ({ ...await original<typeof import("@/lib/api/client")>(), api: { get: mocks.get, post: mocks.post } }));
+vi.mock("@/lib/auth-client", () => ({ useSession: () => ({ data: { user: { id: "billing-viewer" }, session: { activeOrganizationId: "billing-org" } } }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 const copy = baseDictionary.billing;
@@ -67,7 +76,7 @@ const complimentary: BillingState = {
 };
 let root: Root;
 let container: HTMLDivElement;
-const render = async (node: React.ReactNode) => { await act(async () => root.render(<I18nProvider><ModalProvider>{node}</ModalProvider></I18nProvider>)); };
+const render = async (node: React.ReactNode) => { await act(async () => root.render(<I18nProvider><PlatformProvider selfHosted={false}><ModalProvider>{node}</ModalProvider></PlatformProvider></I18nProvider>)); };
 function visibleText() {
   const visible = container.cloneNode(true) as HTMLElement;
   for (const details of visible.querySelectorAll("details:not([open])")) details.replaceChildren(details.querySelector("summary")!.cloneNode(true));
@@ -82,7 +91,7 @@ function button(label: string) {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  mocks.get.mockResolvedValue(payload);
+  mocks.get.mockImplementation(async (path: string) => path === "billing/checkouts" ? { data: { items: [] } } : payload);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -90,6 +99,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -97,22 +107,15 @@ describe("Cloud billing before the first subscription", () => {
   it.each([0, null])("shows no included compute and a live subscription offer for quota %s", async quota => {
     const state = { ...free, balance: { ...free.balance, quotaLimit: quota, total: quota, quotaRemaining: quota } };
     await render(<><BillingOverview state={state} /><BillingSidebar state={state} /></>);
-    expect(container.textContent).toContain(copy.resourcesGuide.noPlan);
-    for (const label of [copy.resourcesGuide.projects, copy.resourcesGuide.apps, copy.resourcesGuide.buildTime]) {
-      const card = container.querySelector(`div[aria-label="${label}"]`);
-      expect(card?.querySelector("[data-resource-value]")?.textContent).toMatch(/^0/);
-      expect(card?.textContent).toContain(copy.onboarding.planRequired);
-    }
-    expect(container.querySelector("dl")?.textContent).not.toMatch(/credits|0 of 3|500/i);
-    expect(container.textContent).not.toMatch(/Unlimited|No set limit|∞/);
+    expect(container.textContent).toContain(copy.onboarding.workspaceDescription);
+    expect(container.querySelector('[role="meter"]')).toBeNull();
+    expect(visibleText()).not.toMatch(/0 of 3|500 credits/i);
     expect(container.textContent).toContain("$15");
-    expect(container.querySelector('[role="note"]')?.textContent).toContain("Hobby: 1,234");
-    expect(container.querySelector("dl")?.textContent).not.toMatch(/credits/i);
+    expect(container.querySelector('a[href="/billing/plans"]')).not.toBeNull();
     expect(button("Subscribe to Hobby").disabled).toBe(false);
     expect(mocks.get).toHaveBeenCalledOnce();
     expect(mocks.get.mock.calls[0]![0]).toContain("billing/plans");
     expect(mocks.post).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="note"] details')).toBeNull();
   });
 
   it("keeps a usable pricing link during catalog failures and recovers on retry", async () => {
@@ -147,11 +150,12 @@ describe("Cloud billing before the first subscription", () => {
   });
 
   it("offers useful empty states without a nonexistent payment portal or credit purchase", async () => {
-    await render(<><PaymentMethodPanel portalAvailable hasHistory={false} /><InvoicesPanel portalAvailable hasHistory={false} /><BillingTopups state={free} /><BillingUsage state={free} /></>);
-    for (const message of [copy.onboarding.paymentTitle, copy.onboarding.invoicesTitle, copy.onboarding.topupsTitle, copy.onboarding.usageTitle]) expect(container.textContent).toContain(message);
+    await render(<><BillingPaymentsPanel portalAvailable hasHistory={false} /><BillingTopups state={free} /><BillingUsage state={free} /></>);
+    for (const message of [copy.onboarding.paymentTitle, copy.onboarding.topupsTitle, copy.onboarding.usageTitle]) expect(container.textContent).toContain(message);
     expect(container.textContent).not.toContain(copy.portal.openButton);
-    expect(container.querySelectorAll('a[href="/billing/plans"]')).toHaveLength(4);
-    expect(mocks.get).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('a[href="/billing/plans"]')).toHaveLength(3);
+    expect(container.textContent).toContain(copy.pendingPayments.empty);
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith("billing/checkouts", { params: { workspaceId: undefined } });
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
@@ -159,8 +163,7 @@ describe("Cloud billing before the first subscription", () => {
     const state = { ...free, balance: { total: 150_000, quotaLimit: 200_000, quotaUsed: 50_000, quotaRemaining: 150_000 } };
     expect(isNewCloudCustomer(state)).toBe(false);
     await render(<BillingCapacity state={state} />);
-    expect(container.textContent).toContain(copy.resourcesGuide.noPlan);
-    expect(container.textContent).toContain("150 credits left");
+    expect(container.textContent).toContain(`${copy.onboarding.savedCredits}: 150`);
     expect(container.textContent).toContain(copy.onboarding.savedCreditsHint);
     expect(visibleText()).not.toContain("150 credits");
   });
@@ -175,7 +178,236 @@ describe("Cloud billing before the first subscription", () => {
     await render(<BillingSidebar state={{ ...paid, subscription: { ...paid.subscription!, cancelAtPeriodEnd: true } }} />);
     expect(container.textContent).toContain(copy.pricing.currentPlan);
     await render(<BillingSidebar state={{ ...paid, subscription: { ...paid.subscription!, status: "canceled" } }} />);
-    expect(button("Subscribe to Hobby").disabled).toBe(false);
+    expect(container.textContent).toContain(copy.sidebar.noActivePlan);
+    expect(container.textContent).not.toContain("Subscribe to Hobby");
+  });
+});
+
+describe("existing server billing", () => {
+  it("uses one Stripe portal action for payment methods and invoices in the selected server", async () => {
+    mocks.post.mockRejectedValueOnce(new Error("Portal temporarily unavailable"));
+    await render(<BillingWorkspaceProvider workspaceId="cws-production"><BillingPaymentsPanel portalAvailable /></BillingWorkspaceProvider>);
+    expect(container.textContent).toContain(copy.paymentPanel.title);
+    expect([...container.querySelectorAll("button")].filter(item => item.textContent === copy.paymentPanel.openStripe)).toHaveLength(1);
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith("billing/checkouts", { params: { workspaceId: "cws-production" } });
+    await act(async () => button(copy.paymentPanel.openStripe).click());
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith("billing/portal", { workspaceId: "cws-production" });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Portal temporarily unavailable");
+    expect(button(copy.paymentPanel.openStripe).disabled).toBe(false);
+  });
+
+  it("keeps an allocated server out of onboarding even with no remaining allowance or usage", async () => {
+    const state = { ...free, capacity: { ...free.capacity, workspaces: { used: 1, max: 1 } } };
+    expect(isNewCloudCustomer(state)).toBe(false);
+    await render(<BillingSidebar state={state} />);
+    expect(container.textContent).toContain(copy.sidebar.noActivePlan);
+    expect(container.textContent).toContain(copy.sidebar.inactiveServer);
+    expect(container.textContent).not.toContain("Start with Hobby");
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("does not turn an allocated server into a newcomer when provider capacity is unavailable", async () => {
+    const state = { ...free, workspace: { id: "workspace", name: "Production", provisioned: true } };
+    expect(isNewCloudCustomer(state)).toBe(false);
+    await render(<BillingSidebar state={state} />);
+    expect(container.textContent).toContain(copy.sidebar.noActivePlan);
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
+  it("preserves a live paid subscription when the entitlement tier is free", async () => {
+    await render(<BillingSidebar state={{ ...paid, tier: "free", status: "past_due", plan: null }} />);
+    expect(container.textContent).toContain(PLANS.starter.name);
+    expect(container.textContent).not.toContain(copy.sidebar.noActivePlan);
+    expect(container.textContent).not.toContain("Start with");
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
+  it("shows the renewal date and preserves access through a scheduled cancellation", async () => {
+    await render(<BillingSidebar state={paid} />);
+    expect(container.textContent).toContain("Renews on Oct 1, 2026");
+    await render(<BillingSidebar state={{ ...paid, subscription: { ...paid.subscription!, cancelAtPeriodEnd: true } }} />);
+    expect(container.textContent).toContain("Access until Oct 1, 2026");
+    expect(container.textContent).not.toContain("Renews on");
+    expect(container.textContent).not.toContain("Start with");
+  });
+
+  it("does not describe an exhausted balance as prepaid credit", async () => {
+    await render(<BillingCapacity state={{ ...free, balance: { ...free.balance, quotaUsed: 150_000, quotaRemaining: -150_000 } }} />);
+    expect(container.textContent).toContain("Balance: -150");
+    expect(container.textContent).not.toContain(copy.onboarding.savedCredits);
+    expect(container.textContent).not.toContain(copy.onboarding.stepsTitle);
+  });
+
+  it.each(["active", "trialing", "past_due", "unpaid", "paused"] as const)("does not start a full-price checkout to replace a %s subscription", async status => {
+    await render(<CloudPlanPicker currentPlan="starter" currentOffer={hobby} subscription={{ ...paid.subscription!, status }} billingEnabled canChangeSubscription />);
+    const choices = [...container.querySelectorAll<HTMLButtonElement>("article button")];
+    expect(choices.length).toBeGreaterThan(0);
+    expect(choices.every(choice => choice.disabled)).toBe(true);
+    expect(container.textContent).toContain(copy.plansRoute.changeViaSupport);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("existing server plan-change review", () => {
+  const planCopy = copy.planChange;
+  const quote = (overrides: Partial<BillingPlanChangeQuote> = {}): BillingPlanChangeQuote => ({
+    id: "quote_selected", direction: "upgrade", interval: "monthly", currency: "usd",
+    expiresAt: new Date(Date.now() + 9 * 60_000).toISOString(), effectiveAt: new Date().toISOString(),
+    current: { name: "Saved Hobby", priceCents: 1300 }, next: { name: "Pro", priceCents: 2900 },
+    unusedTimeCredit: 321, remainingTimeCharge: 1234, amountDueNow: 913, nextInvoiceAmount: 2900,
+    resize: { revision: "server_revision", before: { cpuCores: 1, memoryMb: 4096, diskMb: 25600 },
+      after: { cpuCores: 4, memoryMb: 16384, diskMb: 51200 }, restartProjects: [{ id: "project_api", name: "Public API" }] },
+    ...overrides,
+  });
+  const change = (overrides: Partial<BillingPlanChange> = {}): BillingPlanChange => ({
+    id: "change_selected", direction: "upgrade", currency: "usd", effectiveAt: new Date().toISOString(),
+    current: { name: "Saved Hobby", priceCents: 1300 }, next: { name: "Pro", priceCents: 2900 },
+    amountDueNow: 913, status: "payment_pending", cancelable: true, appliedAt: null,
+    errorCode: null, paymentUrl: "https://invoice.stripe.com/i/test", paymentExpiresAt: null,
+    ...overrides,
+  });
+  const picker = (workspaceId = "server_billing_one", interval: "monthly" | "annual" = "monthly") =>
+    <CloudPlanPicker workspaceId={workspaceId} currentPlan="starter" currentOffer={hobby}
+      subscription={{ ...paid.subscription!, interval }} billingEnabled canChangeSubscription />;
+  const choosePro = () => container.querySelector<HTMLButtonElement>('article[aria-label="Pro"] button')!;
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  const dialogButton = (label: string) => {
+    const result = [...dialog()!.querySelectorAll<HTMLButtonElement>("button")].find(item => (item.getAttribute("aria-label") ?? item.textContent?.trim()) === label);
+    expect(result, label).toBeDefined();
+    return result!;
+  };
+  const review = async () => {
+    mocks.post.mockResolvedValueOnce({ data: quote() });
+    await render(picker());
+    expect(choosePro().textContent).toBe(planCopy.review);
+    await act(async () => choosePro().click());
+  };
+
+  it("shows provider prices and affected projects before confirming a paid change", async () => {
+    await review();
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith("billing/subscription/change/preview", {
+      workspaceId: "server_billing_one", planTierId: "pro", custom: undefined, idempotencyKey: expect.any(String),
+    });
+    expect(dialog()?.textContent).toContain("Saved Hobby");
+    for (const text of ["$13.00", "$9.13", "$3.21", "$12.34", "Public API", planCopy.restartAfterPayment])
+      expect(dialog()?.textContent).toContain(text);
+    let finish!: (value: unknown) => void;
+    mocks.post.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await act(async () => { dialogButton(planCopy.confirmUpgrade).click(); dialogButton(planCopy.confirmUpgrade).click(); });
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post).toHaveBeenLastCalledWith("billing/subscription/change", {
+      workspaceId: "server_billing_one", quoteId: "quote_selected", confirmRestart: true,
+    });
+    await act(async () => finish({ data: change() }));
+    expect(dialog()?.textContent).toContain(planCopy.paymentPending);
+    expect(dialog()?.querySelector<HTMLAnchorElement>('a[href="https://invoice.stripe.com/i/test"]')?.textContent).toBe(planCopy.completePayment);
+    expect(mocks.post.mock.calls.some(([path]) => path === "billing/subscription")).toBe(false);
+  });
+
+  it("retries an uncertain acceptance using the saved quote, even after its expiry", async () => {
+    vi.useFakeTimers();
+    await review();
+    mocks.post.mockRejectedValueOnce(new Error("Connection interrupted"));
+    await act(async () => dialogButton(planCopy.confirmUpgrade).click());
+    const input = mocks.post.mock.calls[1];
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(dialog()?.textContent).not.toContain(planCopy.expired);
+    mocks.post.mockResolvedValueOnce({ data: change() });
+    await act(async () => dialogButton(planCopy.retry).click());
+    expect(mocks.post.mock.calls[2]).toEqual(input);
+    expect(mocks.post.mock.calls.filter(([path]) => path === "billing/subscription/change/preview")).toHaveLength(1);
+  });
+
+  it("requires a fresh quote after a definite stale-price rejection", async () => {
+    await review();
+    mocks.post.mockRejectedValueOnce(new ApiError(409, "Conflict", {
+      code: "OBLIEN_BILLING_ERROR", error: "Review the changed price", details: { providerCode: "billing_quote_changed" },
+    }));
+    await act(async () => dialogButton(planCopy.confirmUpgrade).click());
+    mocks.post.mockResolvedValueOnce({ data: quote({ id: "quote_fresh", amountDueNow: 917 }) });
+    await act(async () => dialogButton(planCopy.refreshQuote).click());
+    expect(mocks.post.mock.calls[2]![0]).toBe("billing/subscription/change/preview");
+    expect(mocks.post.mock.calls[2]![1].idempotencyKey).not.toBe(mocks.post.mock.calls[0]![1].idempotencyKey);
+    expect(dialog()?.textContent).toContain("$9.17");
+    mocks.post.mockResolvedValueOnce({ data: change({ amountDueNow: 917 }) });
+    await act(async () => dialogButton(planCopy.confirmUpgrade).click());
+    expect(mocks.post.mock.calls[3]![1].quoteId).toBe("quote_fresh");
+  });
+
+  it("discards a late quote on a server switch and displays the new server's billing interval", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.post.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await render(picker());
+    await act(async () => choosePro().click());
+    await render(picker("server_billing_two", "annual"));
+    expect(container.querySelector('[role="group"][aria-label="Billing interval"]')).toBeNull();
+    expect(container.querySelector('article[aria-label="Pro"]')?.textContent).toContain("$290");
+    await act(async () => finish({ data: quote() }));
+    expect(dialog()).toBeNull();
+    mocks.post.mockResolvedValueOnce({ data: quote({ interval: "annual" }) });
+    await act(async () => choosePro().click());
+    expect(mocks.post).toHaveBeenLastCalledWith("billing/subscription/change/preview", expect.objectContaining({ workspaceId: "server_billing_two" }));
+    expect(dialog()?.textContent).toContain(planCopy.yearly);
+  });
+
+  it("reviews a scheduled downgrade without requesting immediate payment", async () => {
+    mocks.post.mockResolvedValueOnce({ data: quote({ direction: "downgrade", amountDueNow: 0, effectiveAt: "2026-11-01T00:00:00Z" }) });
+    await render(picker());
+    await act(async () => choosePro().click());
+    expect(dialog()?.textContent).toContain("Nov 1, 2026");
+    expect(dialog()?.textContent).not.toContain(planCopy.remainingCharge);
+    mocks.post.mockResolvedValueOnce({ data: change({ direction: "downgrade", status: "scheduled", paymentUrl: null, effectiveAt: "2026-11-01T00:00:00Z" }) });
+    await act(async () => dialogButton(planCopy.confirmDowngrade).click());
+    expect(dialog()?.textContent).toContain("Pro starts on Nov 1, 2026, after renewal payment.");
+    expect(dialog()?.querySelector('a[href*="stripe.com"]')).toBeNull();
+    mocks.post.mockResolvedValueOnce({ data: change({ status: "canceled", cancelable: false, paymentUrl: null }) });
+    await act(async () => dialogButton(planCopy.cancelChange).click());
+    expect(mocks.post).toHaveBeenLastCalledWith("billing/subscription/change/cancel", { changeId: "change_selected", workspaceId: "server_billing_one" });
+    expect(dialog()?.textContent).toContain(planCopy.canceled);
+  });
+
+  it("polls the same pending change and hides its recovery link after application", async () => {
+    vi.useFakeTimers();
+    const initial = change();
+    mocks.get.mockResolvedValue({ data: change({ status: "applied", serverUpdate: "review_required", cancelable: false }) });
+    await render(<SubscriptionChangeStatus initial={initial} workspaceId="server_billing_one" />);
+    expect(container.querySelector('a[href*="stripe.com"]')).not.toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith("billing/subscription/change", { params: { changeId: "change_selected", workspaceId: "server_billing_one" } });
+    expect(container.textContent).toContain(planCopy.resizeReview);
+    expect(container.querySelector('a[href*="stripe.com"]')).toBeNull();
+    expect(container.querySelector('a[href="/billing/overview?workspaceId=server_billing_one"]')).not.toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(mocks.get).toHaveBeenCalledOnce();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("traps review focus and closes without purchasing on Escape", async () => {
+    await review();
+    expect(document.activeElement).toBe(dialog());
+    dialogButton(planCopy.confirmUpgrade).focus();
+    await act(async () => dialogButton(planCopy.confirmUpgrade).dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(dialogButton(planCopy.close));
+    await act(async () => dialogButton(planCopy.close).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(dialog()).toBeNull();
+    expect(mocks.post).toHaveBeenCalledOnce();
+  });
+
+  it("keeps keyboard focus in the dialog when payment and cancellation replace its actions", async () => {
+    await review();
+    dialogButton(planCopy.confirmUpgrade).focus();
+    mocks.post.mockResolvedValueOnce({ data: change() });
+    await act(async () => dialogButton(planCopy.confirmUpgrade).click());
+    expect(dialog()?.contains(document.activeElement)).toBe(true);
+
+    dialogButton(planCopy.cancelChange).focus();
+    mocks.post.mockResolvedValueOnce({ data: change({ status: "canceled", cancelable: false, paymentUrl: null }) });
+    await act(async () => dialogButton(planCopy.cancelChange).click());
+    expect(dialog()?.contains(document.activeElement)).toBe(true);
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(dialog()).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -232,7 +464,6 @@ describe("complimentary Cloud plans", () => {
     expect(visibleText()).toContain(copy.complimentary.label);
     expect(visibleText()).toContain(copy.complimentary.untilRevoked);
     expect(visibleText()).toContain("Credits renew on Oct 27, 2026");
-    expect(container.querySelector('[role="note"]')?.textContent).toContain("Scale: 15,000");
     expect(container.textContent).not.toContain(copy.subscription.billedMonthly);
     expect(container.textContent).not.toContain(copy.onboarding.offerDescription);
     expect(container.querySelector("button")).toBeNull();
@@ -246,17 +477,19 @@ describe("complimentary Cloud plans", () => {
     expect(visibleText()).not.toContain("Credits renew on");
   });
 
-  it("marks the grant as current in plan comparison while keeping checkout disabled", async () => {
-    await render(<CloudPlanPicker
+  it("shows the saved complimentary plan separately from paid offers and keeps checkout disabled", async () => {
+    await render(<><BillingPlanSummary state={complimentary} compact /><CloudPlanPicker
       currentPlan={complimentary.tier}
+      currentOffer={complimentary.plan}
       subscription={complimentary.subscription}
       complimentary={complimentary.complimentary}
       billingEnabled
       canChangeSubscription={false}
-    />);
-    const currentCard = () => [...container.querySelectorAll("h3")].find(heading => heading.textContent === "Scale")!.parentElement!.parentElement!;
-    expect(currentCard().textContent).toContain(copy.pricing.currentPlan);
-    expect(currentCard().querySelector("button")).toBeNull();
+    /></>);
+    const current = container.querySelector('section[aria-label="Current plan"]')!;
+    expect(current.textContent).toContain("Scale");
+    expect(current.textContent).toContain(copy.complimentary.label);
+    expect(current.textContent).not.toContain("$99");
     expect(container.textContent).toContain(copy.complimentary.changeViaSupport);
     expect(container.textContent).not.toContain(copy.plansRoute.changeViaSupport);
     const choose = button("Choose Hobby");
@@ -264,7 +497,7 @@ describe("complimentary Cloud plans", () => {
     await act(async () => choose.click());
     expect(mocks.post).not.toHaveBeenCalled();
     await act(async () => button(copy.pricing.annual).click());
-    expect(currentCard().textContent).toContain(copy.pricing.currentPlan);
+    expect(current.textContent).toContain(copy.complimentary.label);
   });
 
   it("explains complimentary top-up availability without asking for another subscription", async () => {
@@ -279,6 +512,70 @@ describe("complimentary Cloud plans", () => {
 });
 
 describe("customer credit limits", () => {
+  it.each([false, true])("shows provider transfer usage with unlimited=%s", async unlimited => {
+    const compute = monthlyCompute();
+    compute.network = { ...compute.network, included: true, unlimited, status: "active",
+      availableBytes: unlimited ? null : 193 * 1024 ** 3,
+      periodConsumedBytes: 7 * 1024 ** 3, consumedBytes: 19 * 1024 ** 3 };
+    await render(<BillingComputeCoverage state={{ ...paid, compute }} />);
+    expect(container.textContent).toContain(unlimited ? copy.capacity.unlimited : "193 GiB available");
+    expect(container.textContent).toContain("Used this period: 7 GiB");
+    expect(container.textContent).not.toContain("19 GiB");
+    expect(container.textContent).not.toContain(copy.compute.transferRecovery);
+  });
+  it.each(["active", "low", "grace", "blocked"] as const)("uses provider transfer status %s instead of guessing from zero bytes", async status => {
+    const compute = monthlyCompute();
+    compute.network = { ...compute.network, included: true, purchasedBytes: 1024, status, availableBytes: 0 };
+    await render(<BillingComputeCoverage state={{ ...paid, compute }} />);
+    expect(container.textContent).toContain(copy.compute.covered);
+    expect(container.textContent?.includes(copy.compute.transferRecovery)).toBe(status === "blocked");
+  });
+  it("does not show unlimited access for expired monthly coverage", async () => {
+    const compute = monthlyCompute({ covered: false, status: "expired" });
+    compute.network = { ...compute.network, included: true, unlimited: true, status: "inactive", availableBytes: 0 };
+    await render(<BillingComputeCoverage state={{ ...paid, compute }} />);
+    expect(container.textContent).toContain("0 GiB available");
+    expect(container.textContent).toContain(copy.compute.recovery);
+    expect(container.textContent).not.toContain(copy.capacity.unlimited);
+  });
+  it("shows paid monthly coverage without a credit donut or exhausted-balance copy", async () => {
+    const monthly = { ...paid, compute: monthlyCompute(), monthlyCreditLimit: null,
+      balance: { total: null, quotaLimit: null, quotaUsed: 0, quotaRemaining: null },
+      plan: { ...hobby, billingMode: "monthly" as const, monthlyCredits: null } };
+    await render(<BillingCapacity state={monthly} />);
+    expect(visibleText()).toContain(copy.compute.covered);
+    expect(visibleText()).toContain("Paid through Nov 1, 2026");
+    expect(container.querySelector('[role="meter"][aria-label="Cloud usage"]')).toBeNull();
+    expect(container.textContent).not.toContain(copy.creditAlert.exhaustedTitle);
+    expect(container.textContent).not.toContain(copy.resourcesGuide.planUsageNote);
+    expect(container.textContent).not.toContain("credits left");
+    await render(<PlanUsageNote plans={[monthly.plan]} />);
+    expect(container.textContent).toContain(copy.compute.features.capacity);
+    expect(container.textContent).toContain(copy.compute.features.noCredits);
+    expect(container.textContent).not.toContain(copy.resourcesGuide.creditAllowances);
+  });
+  it("separates retained storage charges from expired compute coverage", async () => {
+    const compute = monthlyCompute({ covered: false, status: "storage_payment_required" });
+    compute.retention.amountDue = 1.25;
+    await render(<BillingCapacity state={{ ...paid, compute }} />);
+    expect(visibleText()).toContain(copy.compute.needsAttention);
+    expect(visibleText()).toContain("Retained storage balance: $1.25");
+    expect(visibleText()).not.toContain(copy.creditAlert.exhaustedTitle);
+    const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent?.includes(copy.compute.details))!;
+    await act(async () => { details.open = true; });
+    expect(visibleText()).toContain("$0.05/GiB-month until deleted");
+    expect(visibleText()).toContain("no automatic deletion");
+  });
+  it("charts CPU time for monthly servers while retaining usage units", async () => {
+    mocks.get.mockResolvedValue({ data: { usage: { buckets: [], totals: { credits: 999,
+      vcpu_hours: 12.5, gb_hours: 50, disk_io_gb: 1, network_gb: 0.5 } } } });
+    await render(<BillingUsage state={{ ...paid, compute: monthlyCompute() }} />);
+    expect(visibleText()).toContain(copy.resourceOverview.cpu);
+    expect(visibleText()).toContain("12.5");
+    expect(visibleText()).toContain(copy.compute.usageIncluded);
+    expect(visibleText()).not.toContain(copy.resourcesGuide.selectedRange);
+    expect(visibleText()).not.toContain("999");
+  });
   it("reuses a top-up key after an uncertain response and prevents duplicate clicks", async () => {
     mocks.get.mockResolvedValue({ data: [{ id: "extra", name: "Extra", credits_milli: 617_000, price_cents: 1000, sortOrder: 0 }] });
     let reject!: (reason: Error) => void;
@@ -297,7 +594,7 @@ describe("customer credit limits", () => {
     mocks.get.mockResolvedValue({ data: [{ id: "extra", name: "Extra", credits_milli: 617_000, price_cents: 1000, sortOrder: 0 }] });
     await render(<BillingTopups state={{ ...paid, subscription: { ...paid.subscription!, interval }, topups: { available: true, status: "available" } }} />);
     expect(visibleText()).toContain(percent);
-    expect(visibleText()).toContain("$10.00");
+    expect(visibleText()).toContain("$10");
     expect(visibleText()).toContain(copy.topups.allowanceEquivalent);
     expect(visibleText()).not.toMatch(/credits/i);
     expect(container.textContent).toContain("617 credits");
@@ -307,7 +604,7 @@ describe("customer credit limits", () => {
   it("leads with resource meters and shows credit accounting only on request", async () => {
     await render(<BillingCapacity state={paid} />);
     expect(visibleText()).toContain(copy.resourcesGuide.includedTitle);
-    expect(visibleText()).toContain("25% used");
+    expect(container.querySelector('[role="meter"][aria-label="Cloud usage"]')?.getAttribute("aria-valuenow")).toBe("25");
     expect(visibleText()).toContain("75% remaining");
     expect(visibleText()).toContain("9 remaining");
     expect(container.querySelector('[role="meter"][aria-label="Projects"]')?.getAttribute("aria-valuenow")).toBe("1");
@@ -317,18 +614,19 @@ describe("customer credit limits", () => {
     await act(async () => { details.open = true; });
     expect(visibleText()).toContain("900 credits left");
   });
-  it("shows the provider's shared pool independently from service counts and credit balance", async () => {
-    await render(<BillingCapacity state={{ ...paid, capacity: { ...paid.capacity,
+  it("shows measured server disk use instead of counting reserved project capacity as stored data", async () => {
+    mocks.usage.mockResolvedValue({ available: true, measuredAt: "2026-10-01T00:00:00Z", reason: null,
+      cpuPercent: 10, memoryUsedMb: 512, memoryAvailableMb: 3584,
+      diskUsedMb: 2048, diskAvailableMb: 23552, diskTotalMb: 25600, projects: [], sharedDiskMb: null });
+    await render(<BillingCapacity state={{ ...paid, workspace: { id: "workspace", name: "Production", serverId: "managed-server" }, capacity: { ...paid.capacity,
       vcpus: { used: 3, max: 4 }, ramMb: { used: 3072, max: 8192 }, diskGb: { used: 96, max: 128 },
       workspaces: { used: 3, max: 6 }, buildMinutes: { used: 14, max: null },
     } }} />);
-    for (const [label, used, max] of [[copy.header.vcpus, "3", "4"], [copy.header.ram, "3", "8"], [copy.header.diskCap, "96", "128"]]) {
-      const meter = container.querySelector(`[role="meter"][aria-label="${label}"]`);
-      expect(meter?.getAttribute("aria-valuenow")).toBe(used);
-      expect(meter?.getAttribute("aria-valuemax")).toBe(max);
-    }
+    expect(mocks.usage).toHaveBeenCalledExactlyOnceWith("managed-server");
+    expect(visibleText()).toContain("2 GB / 25 GB");
+    expect(visibleText()).not.toContain("96 GB");
     expect(visibleText()).toContain(copy.resourceOverview.measuredUsage);
-    expect(visibleText()).not.toMatch(/No set limit|3,000 min/);
+    expect(visibleText()).not.toContain("3,000 min");
   });
   it("displays the supplied offer's total capacity without claiming unlimited build time", async () => {
     await render(<PlanResources plan={{ ...hobby, resourceLimits: { ...PLANS.pro.oblienLimits,
@@ -339,20 +637,22 @@ describe("customer credit limits", () => {
     expect(valueFor(copy.resourcesGuide.storage)).toBe("192 GB");
     expect(valueFor(copy.resourcesGuide.buildTime)).toBe(copy.resourcesGuide.buildIncluded);
     expect(container.textContent).not.toContain(copy.resourcesGuide.poolHint);
-    expect(container.textContent).not.toMatch(/No set limit|3,000 min/);
+    expect(container.textContent).not.toContain("3,000 min");
     expect(visibleText()).not.toMatch(/credits/i);
-    expect(visibleText()).toContain("2 vCPU · 3 GB");
+    expect(visibleText()).toContain("2 vCPU · 8 GB");
   });
   it("shows saved preset ceilings and fixed build allowances without using new catalog limits", async () => {
     await render(<PlanResources plan={{ ...hobby, limits: { ...hobby.limits,
       maxServiceResources: undefined, buildMinutesPerMonth: 3000 } }} />);
     expect(visibleText()).toContain("1 vCPU · 1 GB");
-    expect(visibleText()).not.toContain("2 vCPU · 3 GB");
+    expect(visibleText()).not.toContain("2 vCPU · 8 GB");
     expect(visibleText()).toContain("3,000 min / month");
     expect(visibleText()).not.toContain(copy.resourcesGuide.buildIncluded);
   });
   it("shows annual credits from the paid offer and leaves missing credit amounts unknown", async () => {
     await render(<PlanUsageNote plans={[hobby]} interval="annual" />);
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+    await act(async () => { container.querySelector<HTMLDetailsElement>("details")!.open = true; });
     expect(visibleText()).toContain("Hobby: 14,555");
     expect(visibleText()).not.toContain("1,234");
     await render(<PlanUsageNote plans={[{ ...hobby, annualCredits: null }]} interval="annual" />);
@@ -393,7 +693,7 @@ describe("resource usage overview", () => {
   it("renders real usage, traffic remaining and request counts without inventing CPU-hour allowances", async () => {
     mocks.get.mockResolvedValue({ data: usage });
     await render(<BillingResourceUsage state={paid} />);
-    expect(mocks.get).toHaveBeenCalledWith("billing/resources");
+    expect(mocks.get).toHaveBeenCalledWith("billing/resources", { params: { workspaceId: undefined } });
     expect(visibleText()).toContain("2vCPU-h");
     expect(visibleText()).toContain("46.5 GB remaining");
     expect(visibleText()).toContain("130");

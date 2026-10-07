@@ -1,3 +1,4 @@
+import { assertCloudProxyScope } from "../../lib/cloud/scope";
 import { setTimeout as delay } from "node:timers/promises";
 import { AppError, ValidationError, type DeploymentEvent } from "@repo/contracts";
 import { repos } from "@repo/db";
@@ -24,8 +25,8 @@ async function analyticsRead(ctx: ExecutionContext) {
 }
 async function trafficRead(ctx: ExecutionContext, id: string) {
   await analyticsRead(ctx);
-  if (ctx.scopeMode === "fixed" && !getAdminOblienClient() && (await resolveProjectTrafficSources(id)).some(source => source.kind === "cloud"))
-    throw new AppError("This cloud link has no tenant mapping. Connect the SDK directly to the cloud instance with its organizationId.", 409, "CLOUD_SCOPE_UNAVAILABLE");
+  if (!getAdminOblienClient() && (await resolveProjectTrafficSources(id)).some(source => source.kind === "cloud"))
+    assertCloudProxyScope(ctx);
 }
 function minute(value: string | undefined, fallback: number): number {
   const parsed = value === undefined ? fallback : /^-?\d+$/.test(value) ? Number(value) : Math.floor(new Date(value).getTime() / 60_000);

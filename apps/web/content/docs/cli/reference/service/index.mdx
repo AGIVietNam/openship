@@ -18,15 +18,16 @@ openship service|services [options] [command]
 | --- | --- |
 | [`list [options]`](/docs/cli/reference/service#openship-service-list) | List the services in a stack |
 | [`get [options] <service>`](/docs/cli/reference/service#openship-service-get) | Show one service's configuration |
+| [`update [options] <service> <file>`](/docs/cli/reference/service#openship-service-update) | Patch service configuration from a JSON file using the shared service contract |
 | [`create [options] <name>`](/docs/cli/reference/service#openship-service-create) | Add a service to a stack |
 | [`delete\|rm [options] <service>`](/docs/cli/reference/service#openship-service-delete) | Remove a service from a stack |
 | [`sync [options] <compose-file>`](/docs/cli/reference/service#openship-service-sync) | Sync a stack's services from a docker-compose file (services not in the file are removed) |
 | [`start [options] <service>`](/docs/cli/reference/service#openship-service-start) | Start a service's container |
 | [`stop [options] <service>`](/docs/cli/reference/service#openship-service-stop) | Stop a service's container |
-| [`restart [options] <service>`](/docs/cli/reference/service#openship-service-restart) | Bounce a service's container (does NOT apply changed env — use `deploy --refresh` for that) |
+| [`restart [options] <service>`](/docs/cli/reference/service#openship-service-restart) | Restart a service's container (use service env apply for pending environment changes) |
 | [`containers [options]`](/docs/cli/reference/service#openship-service-containers) | List the stack's active-deployment containers |
 | [`drift`](/docs/cli/reference/service#openship-service-drift) | Resolve compose drift on a service (upstream compose changed a value you edited) |
-| [`env`](/docs/cli/reference/service#openship-service-env) | Read and write a service's environment variables |
+| [`env`](/docs/cli/reference/service/env#openship-service-env) | Inspect, edit, and apply a service's environment variables |
 | [`logs [options] <service>`](/docs/cli/reference/service#openship-service-logs) | Show or stream a service's runtime logs |
 | [`exec [options] <service> <command>`](/docs/cli/reference/service#openship-service-exec) | Run a shell command inside a service's isolated container |
 
@@ -131,56 +132,6 @@ openship service drift keep [options] <service>
 | --- | --- |
 | `-p, --project <id\|slug\|name>` | Stack (project) id, slug, or name |
 
-## openship service env
-
-Read and write a service's environment variables
-
-```text
-openship service env [options] [command]
-```
-
-| Subcommand | Purpose |
-| --- | --- |
-| [`get [options] <service>`](/docs/cli/reference/service#openship-service-env-get) | List a service's environment variables (secrets masked) |
-| [`set [options] <service> <pairs...>`](/docs/cli/reference/service#openship-service-env-set) | Set a service's environment variables for one environment |
-
-## openship service env get
-
-List a service's environment variables (secrets masked)
-
-```text
-openship service env get [options] <service>
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `service` | Service name or id |
-
-| Option | Meaning |
-| --- | --- |
-| `-p, --project <id\|slug\|name>` | Stack (project) id, slug, or name |
-| `-e, --env <environment>` | Environment: production \| preview \| development |
-
-## openship service env set
-
-Set a service's environment variables for one environment
-
-```text
-openship service env set [options] <service> <pairs...>
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `service` | Service name or id |
-| `pairs` | KEY=VALUE pairs |
-
-| Option | Meaning |
-| --- | --- |
-| `-p, --project <id\|slug\|name>` | Stack (project) id, slug, or name |
-| `-e, --env <environment>` | Environment: production \| preview \| development (default: "production") |
-| `--secret` | Mark the provided variables as secret |
-| `--replace` | Replace ALL variables for this environment with only the given pairs |
-
 ## openship service exec
 
 Run a shell command inside a service's isolated container
@@ -248,7 +199,7 @@ openship service logs [options] <service>
 
 ## openship service restart
 
-Bounce a service's container (does NOT apply changed env — use `deploy --refresh` for that)
+Restart a service's container (use service env apply for pending environment changes)
 
 ```text
 openship service restart [options] <service>
@@ -311,3 +262,20 @@ openship service sync [options] <compose-file>
 | --- | --- |
 | `-p, --project <id\|slug\|name>` | Stack (project) id, slug, or name |
 | `-y, --yes` | Skip the confirmation prompt |
+
+## openship service update
+
+Patch service configuration from a JSON file using the shared service contract
+
+```text
+openship service update [options] <service> <file>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `service` | Service name or id |
+| `file` | JSON patch (image, command, ports, routing, build settings, enabled, etc.) |
+
+| Option | Meaning |
+| --- | --- |
+| `-p, --project <id\|slug\|name>` | Stack (project) id, slug, or name |

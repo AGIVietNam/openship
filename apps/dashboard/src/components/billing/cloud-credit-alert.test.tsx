@@ -2,33 +2,25 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
-import { CloudCreditAlert, CreditAlertNotice } from "./CloudCreditAlert";
+import { CloudCreditAlert } from "./CloudCreditAlert";
 import { CloudBillingLink } from "./CloudBillingLink";
+import { BillingWorkspaceProvider } from "./BillingWorkspaceContext";
 import { I18nProvider } from "@/components/i18n-provider";
 import { baseDictionary } from "@/i18n";
 import type { BillingState } from "@/lib/api/billing";
+import { monthlyCompute } from "../../../test/helpers/monthly-billing";
 
 const h = vi.hoisted(() => ({
   read: vi.fn(),
   org: "org-a",
-  user: "user-a",
   setActive: vi.fn(),
   setOrg: vi.fn(),
-  listeners: new Set<() => void>(),
 }));
-vi.mock("@/context/AuthContext", () => ({ useAuth: () => ({ user: { id: h.user } }) }));
-vi.mock("@/context/PlatformContext", () => ({ usePlatform: () => ({ selfHosted: false }) }));
-vi.mock("@/context/CloudContext", () => ({ useCloud: () => ({ connected: false }) }));
-vi.mock("@/lib/api/billing", () => ({ billingApi: { getBillingState: h.read } }));
+vi.mock("@/lib/api/billing", () => ({ billingApi: { getCreditAlerts: h.read } }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/billing/topups" }));
 vi.mock("@/lib/api/client", () => ({
   getActiveOrganizationId: () => h.org,
   setActiveOrganizationId: h.setOrg,
-  subscribeActiveOrganization: (listener: () => void) => {
-    h.listeners.add(listener);
-    return () => {
-      h.listeners.delete(listener);
-    };
-  },
 }));
 vi.mock("@/lib/auth-client", () => ({ authClient: { organization: { setActive: h.setActive } } }));
 
@@ -56,15 +48,12 @@ const state = (alertChanges = {}, changes = {}): BillingState => ({
   },
   ...changes,
 });
+
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.useFakeTimers();
-  sessionStorage.clear();
   h.org = "org-a";
-  h.user = "user-a";
-  h.listeners.clear();
-  h.read.mockReset().mockResolvedValue(state());
+  h.read.mockReset();
   h.setActive.mockReset();
   h.setOrg.mockReset();
   container = document.createElement("div");
@@ -74,37 +63,40 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 const render = async (value: React.ReactNode) => {
   await act(async () => root.render(<I18nProvider>{value}</I18nProvider>));
 };
-const notice = (value: BillingState) => (
-  <CreditAlertNotice state={value} organizationId="org-a" userId="user-a" />
+const notice = (value: BillingState, organizationId = "org-a") => (
+  <BillingWorkspaceProvider workspaceId={value.workspace?.id} organizationId={organizationId}>
+    <CloudCreditAlert state={value} />
+  </BillingWorkspaceProvider>
 );
 
-it("shows the provider warning at 80% and a once-per-band popup at 95%, with a scoped top-up action", async () => {
-  await render(notice(state({ percent: 80, threshold: 80, remaining: 800_000 })));
-  expect(container.textContent).toContain("80%");
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
-  await render(notice(state()));
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(container.textContent).toContain("200 credits");
-  expect(container.querySelector("a")?.getAttribute("href")).toBe(
-    "/cloud-billing?organizationId=org-a&tab=topups",
-  );
-  await act(async () =>
-    [...document.querySelectorAll("button")]
-      .find((button) => button.textContent === copy.close)!
-      .click(),
-  );
-  await render(notice(state()));
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
-  expect(container.querySelector('[role="status"]')).not.toBeNull();
+it("never shows stale credit warnings for monthly servers, including inactive coverage", async () => {
+  for (const covered of [true, false]) {
+    await render(notice(state({ state: "depleted", balance: 0 }, { compute: monthlyCompute({ covered }), overQuota: true })));
+    expect(container.textContent).toBe("");
+  }
+  await render(notice(state({ state: "depleted" }, { plan: { billingMode: "monthly" } })));
+  expect(container.textContent).toBe("");
 });
 
-it("distinguishes grace/exhaustion, rearms on renewal, and hides recovered, disabled and unconfigured customers", async () => {
+it("shows the selected server's warning inline and keeps the top-up link in its billing scope", async () => {
+  await render(notice(state({}, { workspace: { id: "server-a", name: "Server A" } })));
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(copy.lowTitle);
+  expect(container.textContent).toContain("200 credits");
+  const href = new URL(container.querySelector("a")!.href);
+  expect(href.pathname).toBe("/billing/topups");
+  expect(href.searchParams.get("workspaceId")).toBe("server-a");
+  expect(href.searchParams.get("organizationId")).toBe("org-a");
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(container.querySelector("[aria-expanded]")).toBeNull();
+  expect(h.read).not.toHaveBeenCalled();
+});
+
+it("distinguishes grace and exhaustion and clears recovered, disabled and unconfigured balances", async () => {
   await render(notice(state({ state: "grace", balance: 60_000 })));
   expect(container.textContent).toContain("60 grace credits");
   await render(notice(state({ state: "depleted", balance: 0 })));
@@ -113,81 +105,33 @@ it("distinguishes grace/exhaustion, rearms on renewal, and hides recovered, disa
     await render(notice(state({ state: current })));
     expect(container.textContent).toBe("");
   }
-  await render(
-    notice(state({ limit: 0, state: "depleted" }, { tier: "free", balance: { quotaUsed: 0 } })),
-  );
+  await render(notice(state({ limit: 0, state: "depleted" }, { tier: "free", balance: { quotaUsed: 0 } })));
   expect(container.textContent).toBe("");
   await render(notice(state({}, { tier: "free" })));
   expect(container.textContent).toContain(copy.lowTitle);
   await render(notice(state({}, { creditAlert: null })));
   expect(container.textContent).toBe("");
-  await render(notice(state({}, { currentPeriod: { start: "2026-10-01", end: "2026-11-01" } })));
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
 
-it("offers billing management when top-ups are disabled and never initiates a purchase itself", async () => {
+it("links to plans when top-ups are unavailable without starting a payment", async () => {
   await render(notice(state({}, { topups: { available: false } })));
-  expect(container.querySelector("a")?.textContent).toBe(copy.openBilling);
-  expect(container.querySelector("a")?.getAttribute("href")).toContain("tab=overview");
+  expect(container.querySelector("a")?.textContent).toBe(baseDictionary.billing.tabs.plans);
+  expect(container.querySelector("a")?.getAttribute("href")).toBe("/billing/plans?organizationId=org-a");
   expect(h.setActive).not.toHaveBeenCalled();
 });
 
-it("focuses the shared dialog and restores focus after Escape without reopening the same warning", async () => {
-  const previous = document.createElement("button");
-  previous.textContent = "Previous control";
-  document.body.append(previous);
-  previous.focus();
-  try {
-    await render(notice(state()));
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(document.activeElement).toBe(dialog);
-    await act(async () =>
-      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
-    );
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(previous);
-    await render(notice(state()));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-  } finally {
-    previous.remove();
-  }
-});
-
-it("removes an already-open warning dialog when the selected organization changes", async () => {
-  await render(<CloudCreditAlert />);
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  h.read.mockResolvedValue(state({ state: "ok" }));
-  await act(async () => {
-    h.org = "org-b";
-    h.listeners.forEach((listener) => listener());
-  });
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+it("replaces the notice with the currently selected server and organization without a separate polling loop", async () => {
+  await render(notice(state({ state: "depleted" }, { workspace: { id: "server-a" } })));
+  expect(container.textContent).toContain(copy.exhaustedTitle);
+  await render(notice(state({ state: "ok" }, { workspace: { id: "server-b" } }), "org-b"));
   expect(container.textContent).toBe("");
-});
-
-it("hides the old organization immediately and rejects its delayed balance response", async () => {
-  let complete!: (value: BillingState) => void;
-  h.read.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      }),
-  );
-  await render(<CloudCreditAlert />);
-  h.read.mockResolvedValue(state({ state: "ok" }));
-  await act(async () => {
-    h.org = "org-b";
-    h.listeners.forEach((listener) => listener());
-  });
-  await act(async () => {
-    complete(state());
-  });
-  expect(container.textContent).toBe("");
-  h.read.mockRejectedValue(new Error("forbidden"));
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000);
-  });
-  expect(container.textContent).toBe("");
+  await render(notice(state({ state: "grace", balance: 30_000 }, { workspace: { id: "server-b" } }), "org-b"));
+  expect(container.textContent).toContain("30 grace credits");
+  const href = new URL(container.querySelector("a")!.href);
+  expect(href.searchParams.get("workspaceId")).toBe("server-b");
+  expect(href.searchParams.get("organizationId")).toBe("org-b");
+  expect(container.textContent).not.toContain(copy.exhaustedTitle);
+  expect(h.read).not.toHaveBeenCalled();
 });
 
 it("a billing link cannot fall back to the active org when the linked organization is forbidden", async () => {
@@ -204,6 +148,6 @@ it("opens top-ups only after the server accepts the linked organization", async 
   await render(<CloudBillingLink organizationId="org-b" tab="topups" />);
   expect(h.setActive).toHaveBeenCalledWith({ organizationId: "org-b" });
   expect(h.setOrg).toHaveBeenCalledWith("org-b");
-  expect(navigate).toHaveBeenCalledWith("/billing/topups");
+  expect(navigate).toHaveBeenCalledWith("/billing/topups?organizationId=org-b");
   expect(h.setOrg.mock.invocationCallOrder[0]).toBeLessThan(navigate.mock.invocationCallOrder[0]);
 });

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { BRAND_LINKS, SUPPORT_EMAIL } from "@repo/core";
+import { BRAND_LINKS, CLOUD_DASHBOARD_URL, SUPPORT_EMAIL } from "@repo/core";
 import { Navbar, Footer } from "@/components/landing";
 import { ContactForm } from "@/components/contact-form";
 
@@ -35,19 +35,24 @@ export default function SupportPage() {
                 <p className="legal-toc-title">Here to help</p>
                 <ol>
                   <li>
+                    <a href={`${CLOUD_DASHBOARD_URL}/support`}>
+                      <span className="legal-toc-n">01</span>My Cloud tickets
+                    </a>
+                  </li>
+                  <li>
                     <a href={`mailto:${SUPPORT_EMAIL}`}>
-                      <span className="legal-toc-n">01</span>
+                      <span className="legal-toc-n">02</span>
                       {SUPPORT_EMAIL}
                     </a>
                   </li>
                   <li>
                     <a href={BRAND_LINKS.docs}>
-                      <span className="legal-toc-n">02</span>Documentation
+                      <span className="legal-toc-n">03</span>Documentation
                     </a>
                   </li>
                   <li>
                     <a href={BRAND_LINKS.community} target="_blank" rel="noreferrer">
-                      <span className="legal-toc-n">03</span>Community
+                      <span className="legal-toc-n">04</span>Community
                     </a>
                   </li>
                 </ol>

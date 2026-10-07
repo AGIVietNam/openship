@@ -11,6 +11,7 @@ export interface UpdateStatusItem {
   kind: "commit" | "release" | "image";
   behind: boolean;
   latestInProgress: boolean;
+  inProgressDeploymentId?: string | null;
   currentLabel: string | null;
   latestLabel: string | null;
   detail: unknown;

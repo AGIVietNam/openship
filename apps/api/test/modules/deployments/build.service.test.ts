@@ -188,7 +188,7 @@ function baseProject(overrides: Record<string, unknown> = {}) {
     hasBuild: true,
     resources: null,
     buildResources: null,
-    cloudWorkspaceId: null,
+    workspaceId: null,
     runtimeMode: "docker",
     defaultRollbackStrategy: "git",
     ...overrides,
@@ -228,6 +228,10 @@ function installStatefulComposeRepo<T extends Record<string, unknown>>(initial: 
   let stored = structuredClone(initial);
   const writes: Array<Record<string, unknown>> = [];
   const db = {
+    transaction: async (run: (tx: Database) => Promise<unknown>) => run(db),
+    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({
+      for: async () => [{ deletionInProgress: false, cloudPromotion: null }],
+    }) }) }) }),
     query: { service: { findMany: async () => [stored] } },
     update: () => ({
       set: (data: Record<string, unknown>) => ({
@@ -494,7 +498,7 @@ describe("resolveSnapshotTarget", () => {
       id: "project-1",
       organizationId: "org-1",
       activeDeploymentId: null,
-      cloudWorkspaceId: null,
+      workspaceId: null,
       serverId: null,
       runtimeMode: null,
       ...overrides,
@@ -521,10 +525,10 @@ describe("resolveSnapshotTarget", () => {
     expect(t).toMatchObject({ deployTarget: "server", serverId: "srv_1" });
   });
 
-  it("lets cloud win over a stray serverId and drops the serverId", async () => {
-    const t = await resolveSnapshotTarget(project({ cloudWorkspaceId: "ws_1", serverId: "srv_1" }));
+  it("keeps the managed server identity on a Cloud target", async () => {
+    const t = await resolveSnapshotTarget(project({ workspaceId: "ws_1", serverId: "srv_1" }));
     expect(t.deployTarget).toBe("cloud");
-    expect(t.serverId).toBeUndefined();
+    expect(t.serverId).toBe("srv_1");
   });
 
   it("lets an explicit override win over the durable binding", async () => {
@@ -1029,7 +1033,7 @@ describe("triggerDeployment", () => {
     expect(resolveProjectInfo).toHaveBeenCalledOnce();
   });
 
-  it("persists exact scope and force-pull intent for an incoming multi-service hook", async () => {
+  it.each(["webhook", "update"])("persists the exact service scope for an %s deployment", async (trigger) => {
     const targets = ["svc-api", "svc-worker"];
     repos.service.listByProject.mockResolvedValue([
       { id: "svc-api", name: "api", enabled: true, advanced: null },
@@ -1046,17 +1050,17 @@ describe("triggerDeployment", () => {
       projectId: "project-1",
       serviceIds: targets,
       strictServiceScope: true,
-      forcePullImages: true,
-      trigger: "webhook",
+      forcePullImages: trigger === "webhook",
+      trigger,
     });
 
     expect(repos.deployment.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        trigger: "webhook",
+        trigger,
         meta: expect.objectContaining({
           targetServiceIds: targets,
           strictServiceScope: true,
-          forcePullImages: true,
+          ...(trigger === "webhook" ? { forcePullImages: true } : {}),
         }),
       }),
     );
@@ -1075,7 +1079,7 @@ describe("triggerDeployment", () => {
     expect(meta.strictServiceScope).toBeUndefined();
   });
 
-  it("rejects a stale exact target after compose reconciliation and queues nothing", async () => {
+  it.each(["webhook", "update"])("%s rejects a stale exact target after compose reconciliation and queues nothing", async (trigger) => {
     repos.service.listByProject.mockResolvedValue([
       { id: "svc-api", name: "api", enabled: true, advanced: null },
     ]);
@@ -1086,7 +1090,7 @@ describe("triggerDeployment", () => {
         serviceIds: ["svc-api", "svc-deleted"],
         strictServiceScope: true,
         forcePullImages: true,
-        trigger: "webhook",
+        trigger,
       }),
     ).rejects.toThrow(/svc-deleted/);
 
@@ -1094,7 +1098,7 @@ describe("triggerDeployment", () => {
     expect(kickoffBuild).not.toHaveBeenCalled();
   });
 
-  it("rejects replacing a namespace provider without its dependent", async () => {
+  it.each(["webhook", "update"])("%s rejects replacing a namespace provider without its dependent", async (trigger) => {
     repos.service.listByProject.mockResolvedValue([
       { id: "svc-vpn", name: "vpn", enabled: true, advanced: null },
       {
@@ -1111,7 +1115,7 @@ describe("triggerDeployment", () => {
         serviceIds: ["svc-vpn"],
         strictServiceScope: true,
         forcePullImages: true,
-        trigger: "webhook",
+        trigger,
       }),
     ).rejects.toThrow(/svc-sidecar/);
 
@@ -1867,7 +1871,7 @@ describe("triggerDeployment", () => {
       baseProject({
         framework: "nextjs",
         activeDeploymentId: "dep-live",
-        cloudWorkspaceId: "ws-live",
+        workspaceId: "ws-live",
       }),
     );
     repos.deployment.findById.mockResolvedValue({

@@ -5,31 +5,15 @@ import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
  * Uses the named SDK operations shared with native integrations.
  */
 
-import { Command } from "commander";
-import chalk from "chalk";
-import ora, { type Ora } from "ora";
-import { getShipClient, ApiError } from "../lib/ship-client";
+import { Command, Option } from "commander";
+import { getShipClient } from "../lib/ship-client";
+import { spin, fail, confirmOrExit, printResult } from "../lib/cmd-helpers";
 import type { Domain, DomainRecords, DomainSsl } from "@repo/sdk/client";
 import { printJson, printTable, isJsonMode, ok, err, info } from "../lib/output";
 
 // ─── Shapes (subset of @repo/db Domain we render) ────────────────────────────
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Suppress the spinner in JSON mode so stdout stays a clean data stream. */
-function spin(text: string): Ora | null {
-  return isJsonMode() ? null : ora(text).start();
-}
-
-/** Print an ApiError (or any error) and exit non-zero. */
-function fail(e: unknown): never {
-  if (e instanceof ApiError) {
-    err(`  ${e.message}${e.status ? chalk.dim(` (${e.status})`) : ""}`);
-  } else {
-    err(`  ${e instanceof Error ? e.message : String(e)}`);
-  }
-  exitCommand(1);
-}
 
 function domainRow(d: Domain): Record<string, unknown> {
   return {
@@ -120,6 +104,7 @@ const verifyCmd = new Command("verify")
       if (isJsonMode()) {
         sp?.stop();
         printJson(body);
+        if (!body.verified) exitCommand(1);
         return;
       }
       if (body.verified) {
@@ -202,7 +187,7 @@ const verifySslCmd = new Command("verify-ssl")
       if (data.verified) sp?.succeed(`Certificate valid for ${data.domain}`);
       else sp?.fail(`Certificate not valid yet for ${data.domain}`);
       printSsl(data);
-      if (!isJsonMode() && !data.verified) exitCommand(1);
+      if (!data.verified) exitCommand(1);
     } catch (e) {
       rethrowCommandExit(e);
       sp?.fail("SSL check failed");
@@ -236,6 +221,36 @@ const renewAllCmd = new Command("renew-all")
     }
   });
 
+const dnsCmd = new Command("dns").description("Plan and apply provider-managed DNS records");
+dnsCmd.command("plan").argument("<id>", "Domain ID").option("--server <id>", "Target server ID")
+  .description("Preview DNS record changes without applying them")
+  .action((id: string, opts) => printResult(() => getShipClient().domains.dnsPlan(id, { serverId: opts.server })));
+dnsCmd.command("apply").argument("<id>", "Domain ID").option("--server <id>", "Target server ID")
+  .description("Apply DNS records through the shared provider workflow")
+  .action((id: string, opts) => printResult(async () => {
+    const result = await getShipClient().domains.dnsApply(id, { serverId: opts.server });
+    if (!result.provisioned) process.exitCode = 1;
+    return result;
+  }));
+const challengeCmd = new Command("challenge").description("Manage a DNS certificate challenge");
+challengeCmd.command("get").argument("<id>", "Domain ID").description("Inspect the current challenge and required TXT record")
+  .action((id: string) => printResult(() => getShipClient().domains.dnsChallenge(id)));
+challengeCmd.command("start").argument("<id>", "Domain ID")
+  .addOption(new Option("--mode <mode>", "Use a DNS provider or add the TXT record yourself").choices(["automatic", "manual"]).default("automatic"))
+  .option("--force", "Request a new certificate even if the current certificate is still valid")
+  .description("Start a certificate challenge through the shared certificate workflow")
+  .action((id: string, opts) => printResult(() => getShipClient().domains.startDnsChallenge(id, { mode: opts.mode, force: opts.force })));
+for (const [name, method] of [["check", "checkDnsChallenge"], ["cancel", "cancelDnsChallenge"]] as const) {
+  challengeCmd.command(name).argument("<id>", "Domain ID").requiredOption("--attempt <id>", "Exact challenge attempt ID from start/get")
+    .description(`${name === "check" ? "Check the TXT record for" : "Cancel"} a specific challenge attempt`)
+    .action((id: string, opts) => printResult(async () => {
+      const result = await getShipClient().domains[method](id, { attemptId: opts.attempt });
+      if (result.status === "failed" || result.status === "expired") process.exitCode = 1;
+      return result;
+    }));
+}
+dnsCmd.addCommand(challengeCmd);
+
 // ─── Parent group ────────────────────────────────────────────────────────────
 
 export const domainCommand = new Command("domain")
@@ -248,4 +263,13 @@ export const domainCommand = new Command("domain")
   .addCommand(recordsCmd)
   .addCommand(renewCmd)
   .addCommand(verifySslCmd)
-  .addCommand(renewAllCmd);
+  .addCommand(renewAllCmd)
+  .addCommand(dnsCmd);
+domainCommand.command("get").argument("<id>", "Domain ID").description("Show a domain and its routing configuration")
+  .action((id: string) => printResult(() => getShipClient().domains.get(id)));
+domainCommand.command("remove").alias("rm").argument("<id>", "Domain ID")
+  .description("Remove a domain and its managed route").option("-y, --yes", "Skip confirmation")
+  .action((id: string, opts) => printResult(async () => {
+    await confirmOrExit(opts.yes, `Remove domain ${id}?`);
+    return getShipClient().domains.remove(id);
+  }));

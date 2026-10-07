@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # ─── Build stage ────────────────────────────────────────
-# Pin bun (was :latest — non-deterministic; drifted to 1.3.14) to .bun-version.
-FROM oven/bun:1.3.3 AS builder
+# Keep both stages on .bun-version; runtime tests cover private-CA HTTPS and async WebSocket upgrades.
+FROM oven/bun:1.3.14 AS builder
 WORKDIR /app
 
 COPY package.json bun.lock pnpm-workspace.yaml ./
@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
  && cd apps/api && bun run build
 
 # ─── Production stage ──────────────────────────────────
-FROM oven/bun:1.3.3 AS runner
+FROM oven/bun:1.3.14 AS runner
 WORKDIR /app
 
 # Remote-server management from the containerized control plane:

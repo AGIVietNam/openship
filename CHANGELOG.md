@@ -3,31 +3,287 @@
 All notable changes to Openship. Versions follow [semver](https://semver.org);
 the in-app updater surfaces critical advisories from `release-advisories.json`.
 
-## Unreleased
+## 0.8.2
 
-### Fixed
+### Desktop update recovery
 
-- Cloud GitHub connections use separate repository authorization, so a GitHub
-  identity can connect multiple Openship accounts without transferring sign-in.
-  Existing installations can be selected, personal tokens remain available in
-  Git settings, and each connection reports its own completion or failure.
-  Direct installation links also offer existing accounts before opening GitHub,
-  avoiding reconnects that end on GitHub settings without a setup callback.
-- Compose deployments preserve unchanged image services across folder uploads
-  and snapshot syncs. Import metadata updates no longer mark services dirty or
-  overwrite the timestamp of a concurrent configuration edit. Changed project
-  resource limits still apply while respecting each service's overrides (#986).
-- Docker replacement and teardown use graceful shutdown by default, honoring
-  image stop signals and configured grace periods. Runtime probes reap their
-  watchdog before exiting so PostgreSQL does not mistake it for a crashed backend.
-- Instance and project exports include plaintext environment values, server keys
-  and credentials by default, without an export password. Imports still read
-  older encrypted archives and encrypt credentials with the destination's key.
-- Instance imports preserve the archive's scope and default to full replacement
-  after confirmation. Project overwrite removes destination-only records in
-  selected categories and applies cleared credentials atomically.
-- Project exports retain overview analytics for normalized hostnames, including
-  `www` domains. New imports reject unsupported fields before changing any data.
+**Desktop users on 0.8.0 or 0.8.1: please install this update manually once.**
+The built-in updater in those versions can fail with **"Redirect was cancelled"**.
+Download the installer for your operating system from the
+[0.8.2 release](https://github.com/oblien/openship/releases/tag/v0.8.2), quit Openship,
+and replace the installed application. Keep your application data: your local
+projects, servers and settings are preserved. Subsequent desktop updates use the
+fixed downloader.
+
+- Fixed GitHub release redirects in the desktop updater while retaining trusted
+  download hosts, SHA-256 checks and publisher signature verification.
+- Added a real Electron download test to the existing CI and release test gate,
+  covering installer and proof redirects, blocked destinations, redirect loops,
+  cancellation and incomplete-download cleanup.
+- This redirect bug affects the desktop installer updater. The server/CLI update
+  path is separate and does not need this manual recovery step.
+
+## 0.8.1
+
+Openship Cloud now runs projects on managed servers with their own monthly plans.
+Share a server across applications, add another when you need it, and manage your
+Cloud resources alongside local projects from desktop or self-hosted Openship.
+This release also adds passkeys, authenticator 2FA and a private support inbox,
+expands CLI automation, and improves billing, migration and deployment recovery.
+
+### Managed Cloud servers
+
+- **One server, multiple projects** — each managed server has its own subscription
+  and shared CPU, RAM and disk. Builds, applications, Compose stacks and catalog
+  services use the existing Docker and Bare deployment engines. Creating a project
+  no longer allocates a separate VM or reserves another disk (#1036).
+- **Choose Docker or Direct execution** — use Docker for containers and Compose,
+  or run compatible source applications as supervised host processes with Direct.
+  The shared destination picker can select an existing server or start a purchase
+  for another. New eligible source apps default to Direct below 2 GiB RAM; saved
+  projects and explicit runtime choices are preserved (#1064).
+- **Use the capacity you purchased** — a service can use the server's full
+  available CPU and RAM, or use a custom container limit. Fractional CPU settings,
+  including Micro, reach Docker correctly. Source builds use available server
+  headroom and optional build caps; image-only installs do not start a source
+  builder. Applications, builds and the operating system still share the host.
+- **Inspect usage separately from capacity** — server monitoring distinguishes
+  the purchased disk size from measured usage. Project containers and volumes have
+  a disk breakdown, with shared images, build cache and system data shown
+  separately. Missing readings stay unknown, and undeployed drafts no longer
+  inflate running-service counts (#1011).
+- **Manage the server when you need to** — reuse server diagnostics, terminals,
+  listening-port checks and resource views. Networking controls outbound internet
+  access; the Activity tab holds provisioning and resize logs. Scheduled command
+  jobs can target shared or separately subscribed managed servers.
+- **Recover operations without losing neighboring projects** — provisioning,
+  resize and interrupted deployment work retain progress for retry. Resizing
+  restores previously running services while leaving intentionally stopped ones
+  stopped. Project deletion removes its own resources and preserves the shared
+  server; server deletion checks remaining projects and subscription state.
+
+### Cloud accounts on desktop and self-hosted Openship
+
+- **Your existing Cloud resources appear when you connect** — Cloud projects,
+  apps and managed servers join the local inventory. A server already linked to
+  the installation appears once. Cloud-owned settings, deployment history and
+  operations stay in Cloud rather than becoming local project copies (#1074).
+- **Buy and use managed servers from the same dashboard** — Cloud subscriptions
+  and provisioning remain in Cloud. Local projects can select an authorized
+  managed server through the same destination picker as SSH servers, using an
+  execution link for deployment, logs, terminals, jobs and backups.
+- **Account switches clear the previous account's state** — inventories, project
+  details, deployment history and billing responses follow the selected Cloud
+  account and organization. Connections are revalidated for live operations;
+  locally scoped automation credentials do not inherit the owner's Cloud account.
+
+### Billing and plans
+
+- **Monthly servers include their full paid period** — new monthly plans cover
+  purchased CPU, RAM and storage without a second compute-credit allowance or a
+  monthly build-time cap. New offers have no project or running-service count
+  limit; workloads share the server's physical capacity. Optional managed proxy
+  transfer and storage retained after coverage ends remain separate charges.
+- **Revised plans and Custom resources** — Hobby is $5/month for 1 vCPU, 4 GiB RAM
+  and 25 GiB disk; Starter is $20 for 2 vCPU, 8 GiB and 32 GiB; Pro is $39 for
+  4 vCPU, 16 GiB and 128 GiB; Scale is $99 for 8 vCPU, 32 GiB and 256 GiB. Custom
+  lets you choose CPU, RAM and disk and review a quote before checkout.
+- **Billing follows the selected server** — switch servers without losing the
+  page, inspect each subscription independently, or use **Get server** for a new
+  purchase. First-time customers see plans rather than empty usage screens.
+  Smaller upgrade comparisons keep compact cards and a separate current-plan
+  summary; payment methods and invoices share the server's Stripe portal.
+- **Review plan changes before applying them** — show the provider's prorated
+  amount, effective date and affected projects. Capacity upgrades apply after
+  confirmed payment; resource reductions and billing-mode changes wait until
+  renewal. Pending changes remain visible, and a resize requires restart consent.
+  Disks can grow but cannot shrink in place.
+- **Checkout has a visible recovery path** — payment confirmation, paid coverage
+  and server readiness are separate steps. Setup failures expose progress and
+  retry without asking for another purchase; the welcome dialog appears when
+  setup completes. Unavailable offers show a dedicated dialog with retry and a
+  support request for availability updates (#1062).
+- **Resume or cancel unfinished payments** — **Pending payments** lists each
+  server's saved offer and opens its original checkout. Provider-confirmed
+  cancellation lets you choose another plan or delete an unused, unpaid server.
+  Cloud and connected installations share the recovery flow, and switching
+  accounts discards the previous account's payment details and responses (#1067).
+- **Preview prepaid PAYG tiers** — compare three shared resource-pool tiers,
+  configure server resources and select a credit package in one calculator. The
+  estimate separates active vCPU-hours, reserved RAM and storage, with hourly
+  costs and balance-duration scenarios. Enterprise contact is available in both
+  purchase views. PAYG purchases remain disabled in this release (#1057).
+
+### Account security and GitHub
+
+- **Passkeys and authenticator 2FA** — Settings → Security supports passkey
+  registration and removal, authenticator QR setup, and single-use recovery codes.
+  Enabled 2FA also applies after social and passkey sign-in. These controls are
+  available on Cloud and self-hosted installations with local accounts (#984).
+- **Account protection remains consistent during failures** — credential changes
+  commit together, concurrent requests cannot reuse a challenge or recovery code,
+  and password resets do not disable 2FA. OAuth, invitation and MCP handoffs resume
+  after verification. Security setup state clears when the account changes.
+- **GitHub repository access is independent of sign-in** — one GitHub identity
+  can authorize repositories for multiple Openship accounts without transferring
+  login ownership. Reconnect existing installations from the shared connection
+  flow, including direct installation links, and see completion or failure for
+  each attempt (#992).
+- **Personal tokens work throughout the repository flow** — Git settings remain
+  reachable through the alternative connection option. A verified token can supply
+  repository and owner listings and private-source access when no GitHub App
+  connection is available. Account avatars and Git URL entry are clearer.
+
+### Support and onboarding
+
+- **A private Cloud support inbox** — submit deployment, billing, account or
+  general tickets, search your history, reply and resolve or reopen a conversation.
+  The same personal ticket history is available from Cloud-connected desktop and
+  self-hosted installations. Team membership does not expose another user's
+  tickets (#1073).
+- **Support and contact pages accept durable requests** — submissions are saved
+  before email delivery, with a receipt and notification to `support@openship.io`.
+  Delivery retries survive API restarts, and support replies appear in the inbox
+  and are emailed to the customer. Retried submissions reuse their original
+  receipt rather than creating another ticket (#970).
+- **Clearer first-run and account screens** — refreshed Cloud plan prompts,
+  purchase welcome dialogs, email-verification and password-reset completion
+  screens. The home page omits empty system-status cards for new Cloud accounts,
+  and already subscribed users do not keep seeing the first-purchase promotion.
+
+### Apps and migration
+
+- **Apps have their own place** — a dedicated Apps sidebar entry and list keep
+  catalog applications separate from source projects. Compact home rows, restored
+  empty states and clickable app illustrations make discovery less cluttered.
+- **A more consistent deployment wizard** — share destination and server controls
+  across Cloud and self-hosted modes, with Full/Custom power choices, filled
+  inputs, compact Build/Start settings, readable deployment-step icons and clearer
+  draft project details. App install forms support grouped and two-column layouts.
+- **App installation explains routing and resource choices** — public dashboards
+  start with domain routing and ask for confirmation before continuing without a
+  recommended domain. Self-hosted app CPU/RAM recommendations are advisory;
+  failed Cloud installs can be retried or cleaned up without treating an absent
+  runtime as a teardown failure (#1009, #1016).
+- **Import Docker applications into managed Cloud servers** — reuse the existing
+  migration engine for images, environment, volumes, bind data and routes. Cloud
+  can connect an external SSH server as a migration-only source. Target preparation,
+  saved progress, verification and explicit cutover support recovery; source data
+  is preserved and source-container retirement requires consent.
+- **Review imports as cards or topology** — compact expandable service cards are
+  the default, with a topology view, expand-all controls, repository linking and
+  clearer Custom, Free and Internal-only routing choices.
+
+### Builds, deployments and recovery
+
+- **Stop cancels the selected builder** — cancellation reaches the worker's
+  actual Docker or Bare runtime, including remote Git and archive preparation.
+  The UI shows **Stopping…** until cleanup finishes, then permits redeployment.
+  Cancelling a build preserves deployed containers that inherited build labels;
+  ambiguous service ownership still blocks activation (#1059).
+- **Build output stays readable** — Cloud Docker streams preserve raw bytes,
+  partial lines, UTF-8 characters and terminal progress updates. Uploads finish
+  correctly when stdin closes. Disk and inode exhaustion are explained separately
+  from memory failures, and temporary BuildKit cache is reclaimed after builds
+  (#1058, #1064).
+- **Unchanged Compose services stay running** — folder uploads and snapshot syncs
+  no longer mark unchanged image services dirty. Import metadata preserves
+  concurrent configuration edits; inherited project resource changes still apply
+  while respecting per-service overrides (#989).
+- **Pre-deploy backups finish before activation** — deployments wait for all
+  configured pre-deploy backups and their cleanup, including when reusing a build.
+  Failed backups offer retry, an explicit skip or stop. PostgreSQL dumps must
+  succeed, and suspiciously small dumps are rejected against recent comparable
+  backups before becoming restore points (#1060).
+- **Remote builds and static releases use the right paths** — subfolder refreshes
+  preserve root manifests and rescan at the project root. Static output resolves
+  relative to that root, and retained artifacts are checked on their deployment
+  destination for rollback. Directory-only `.dockerignore` negations are honored
+  (#1010, #1041).
+- **Health checks and shutdown respect the runtime** — configured single-app
+  readiness probes run through the deployment server; unreachable SSH leaves a
+  check unverified. Docker replacement honors stop signals and grace periods,
+  probe watchdogs are reaped, and Bare services retain the correct user privileges
+  and artifact ownership (#1043).
+- **Farm.js detection** — identify Farm.js applications and supply the framework's
+  build and output defaults (#1037).
+
+### Domains, networking and monitoring
+
+- **Free domains follow the selected managed server** — availability and quota
+  checks retain the destination through project creation, Compose synchronization
+  and deployment. Route changes are validated before related settings are saved;
+  editing an existing route at the limit does not count it as a new route (#1064).
+- **Connect Cloudflare from domain setup** — add and verify a DNS credential
+  without leaving the DNS panel, review proposed records, then apply them.
+  Cloudflare TXT quoting and Cloud certificate-status handling are corrected,
+  while certificate checks verify the domain's project binding (#977).
+- **More reliable wildcard HTTPS and Edge recovery** — DNS challenge hooks pass
+  Certbot validation, Compose installations detect Edge correctly, and challenge
+  route cleanup checks ownership. Whole-project rules handle a null path prefix
+  correctly. Projects no longer have the unrelated 20-public-endpoint schema cap
+  (#1054, #1003, #1017, #1045).
+- **Source updates remain visible until deployment completes** — the project
+  deployment tab indicates available updates; unchanged image services are not
+  refreshed unnecessarily. Updates on the local Openship instance use the
+  appropriate advisory flow, and resource reporting accepts current Docker
+  runtime limits (#1006, #1047).
+- **Connection and setup fixes** — recover Cloud Docker connections after
+  credential rotation, report missing proxy/bridge failures clearly, correct
+  registry TLS/WebSocket dependency compatibility, and handle Docker networks
+  without subnets during cluster setup (#970, #1068, #961).
+
+### SDK, CLI and platform fixes
+
+- **More administration through Ship SDK and the CLI** — add commands for project
+  resources, environments, storage and connections; credentials and DNS;
+  monitoring, notifications and webhooks; workspace access and audit history.
+  They use the shared platform operations and permission checks.
+- **Safer command targeting and environment edits** — each CLI invocation keeps
+  its selected endpoint, credential and organization. Directory links reject
+  mismatched contexts. Partial service environment edits preserve other values
+  and secret classification; full replacement is explicit. Deployment waits have
+  deadlines and expose pending decisions, and request logs can be followed through
+  the SDK's authorized Cloud stream.
+- **Clearer MCP Cloud workflows** — discover authorized managed destinations and
+  deploy desktop folders through a connected server. Explicit promotion to Cloud
+  can resume from its saved receipt after an interrupted response or cleanup,
+  without importing the project again (#1056).
+- **Webmail and dashboard fixes** — Spam, Not spam and Archive move messages into
+  the correct IMAP folders. Notification settings and icons recover from hydration
+  races, Teams accepts current Microsoft webhook hosts, member-access settings
+  avoid repeated refetches, and background project deletion preserves navigation
+  (#981, #1004, #1008, #1035, #1024, #1066).
+- **API startup and bulk-action validation** — capacity previews pass the startup
+  permission scan, and malformed bulk container requests are rejected instead of
+  being interpreted as an empty request (#1033, #994).
+- **Optional Cloud product analytics** — the hosted Cloud API can send configured
+  PostHog events for signup, deployment and verified checkout/payment outcomes.
+  Delivery is queued separately from those operations. Telemetry runs only on the
+  hosted Cloud API; local operations, logs, secrets and session recordings are
+  excluded.
+
+### Data transfer and upgrade notes
+
+- **Complete, portable exports** — instance and project archives include plaintext
+  environment values, server keys and credentials by default, without an export
+  password. Treat the archive as sensitive or explicitly omit secrets. Imports
+  still accept older encrypted archives and encrypt credentials with the
+  destination's key.
+- **Imports preserve scope and selected data** — instance imports default to
+  full replacement after confirmation. Project overwrite removes destination-only
+  records in selected categories and applies cleared credentials atomically.
+  Project analytics retain normalized hostnames, including `www`; unsupported
+  archive fields are rejected before changing data.
+- **Upgrade Cloud before connected clients** — new inventory and support features
+  require the matching Cloud API. Desktop-initiated cancellation fixes require an
+  updated desktop controller. Existing per-project Cloud deployments need an
+  explicit migration to managed servers; updating alone does not consolidate VMs
+  or replace saved subscription terms.
+- **Keep account-security configuration stable** — self-hosted passkeys require
+  HTTPS and a stable dashboard hostname through `OPENSHIP_PUBLIC_URL` (localhost
+  is supported for development). Retain and back up `BETTER_AUTH_SECRET`, which
+  protects authenticator secrets and recovery codes.
 
 ## 0.8.0
 

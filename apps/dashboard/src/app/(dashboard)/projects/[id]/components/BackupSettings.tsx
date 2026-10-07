@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import DropdownMenu, { type MenuAction } from "@/components/ui/DropdownMenu";
 import { CreateDestinationModal } from "@/components/backup/CreateDestinationModal";
 import { PolicyEditor } from "@/components/backup/PolicyEditor";
+import { BackupIllustration } from "@/components/backup/BackupIllustration";
 import { BackupRunCard } from "@/components/backup/BackupRunCard";
 import { BackupStatusChip } from "@/components/backup/BackupStatusChip";
 import { RestoreWizard } from "@/components/backup/RestoreWizard";
@@ -23,6 +24,7 @@ import { EDITABLE_KINDS, KIND_ICONS, kindLabel, DestinationVerificationBadge } f
 import { partsFromCron } from "@/lib/backup-schedule";
 import { formatBytes } from "@/lib/formatBytes";
 import { isBackupRunning, latestBackupRun, mergeBackupRuns } from "@/lib/backup-run-state";
+import { cn } from "@/lib/utils";
 
 type BackupCopy = ReturnType<typeof useI18n>["t"]["projectSettings"]["backup"];
 type BackupData = {
@@ -373,18 +375,24 @@ export function BackupSettings(): React.JSX.Element {
               value={String(destinations.length)}
             />
           </dl>
-          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="min-w-0 space-y-5">
+          <div
+            className={cn(
+              "grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]",
+              recentRuns.length === 0 ? "items-stretch" : "items-start",
+            )}
+          >
+            <div className="flex min-w-0 flex-col gap-5">
               <section
-                className="overflow-hidden rounded-2xl border border-border/50 bg-card"
+                className={cn(
+                  "flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-card",
+                  recentRuns.length === 0 && "flex-1",
+                )}
                 aria-label={b.recent.title}
               >
                 <SectionHeading title={b.recent.title} description={b.recent.description} />
                 {recentRuns.length === 0 ? (
-                  <div className="flex flex-col items-center px-5 py-12 text-center">
-                    <div className="mb-3 flex size-11 items-center justify-center rounded-xl bg-muted/50 text-muted-foreground">
-                      <Icon name="database-backup" className="size-5" />
-                    </div>
+                  <div className="flex flex-1 flex-col items-center justify-center px-5 py-8 text-center">
+                    <BackupIllustration />
                     <p className="text-sm font-medium text-foreground">{b.recent.empty}</p>
                     <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
                       {b.recent.emptyHint}
@@ -581,7 +589,7 @@ export function BackupSettings(): React.JSX.Element {
               )}
             </div>
             <aside
-              className="min-w-0 rounded-2xl border border-border/50 bg-card"
+              className="flex min-w-0 flex-col rounded-2xl border border-border/50 bg-card"
               aria-label={b.destinations.title}
             >
               <SectionHeading
@@ -702,7 +710,7 @@ export function BackupSettings(): React.JSX.Element {
                   })}
                 </ul>
               )}
-              <div className="p-5">
+              <div className="mt-auto p-5">
                 <Button
                   variant={destinations.length ? "outline" : "default"}
                   className="w-full"

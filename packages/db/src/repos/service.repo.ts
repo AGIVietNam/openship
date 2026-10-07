@@ -1,7 +1,8 @@
-import { eq, and, asc, inArray, sql } from "drizzle-orm";
+import { eq, and, asc, inArray, or, sql } from "drizzle-orm";
 import {
   commandToArgv,
   generateId,
+  sortJsonKeys,
   mergeAdvanced,
   normalizeCustomHostname,
   resolveCommandArgv,
@@ -11,6 +12,7 @@ import {
 } from "@repo/core";
 import type { Database } from "../connection";
 import { createConfigurationSecrets, type ConfigurationEncryption } from "../configuration-secrets";
+import { assertProjectConfigurationWritable, withProjectConfigurationWrite } from "./project-work-admission";
 import { deployment, envVar, project, service, serviceDeployment } from "../schema";
 import type { ComposeServiceSpec, ServicePublicEndpoint } from "../schema/service";
 import { liveBuildExecutionCondition } from "./deployment.repo";
@@ -80,27 +82,9 @@ export function toComposeSpec(s: {
   };
 }
 
-/**
- * Recursively sort object keys so two structurally-equal values stringify
- * identically, while preserving array order. This generalizes the old
- * environment-only sort: reordered maps (env, and now nested `advanced` blocks
- * like healthcheck/labels) must NOT read as drift, but ordered arrays (ports,
- * volumes, dependsOn, healthcheck argv) are order-significant and kept as-is.
- */
-const canonicalize = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    const sorted: Record<string, unknown> = {};
-    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
-      sorted[k] = canonicalize((value as Record<string, unknown>)[k]);
-    }
-    return sorted;
-  }
-  return value;
-};
-
+/** Reordered maps are equal; ports, volumes and argv retain their array order. */
 const composeValuesEqual = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
+  JSON.stringify(sortJsonKeys(a)) === JSON.stringify(sortJsonKeys(b));
 
 /** Compose-field equality (ignores routing + ordering-insensitive env). */
 export const composeSpecsEqual = (a: ComposeServiceSpec, b: ComposeServiceSpec) =>
@@ -445,7 +429,7 @@ export function composeSpecDiff(base: ComposeServiceSpec, next: ComposeServiceSp
   const b = toComposeSpec(base);
   const n = toComposeSpec(next);
   for (const f of fields) {
-    if (JSON.stringify(canonicalize(b[f])) !== JSON.stringify(canonicalize(n[f]))) {
+    if (!composeValuesEqual(b[f], n[f])) {
       changed.push({ field: f, from: b[f], to: n[f] });
     }
   }
@@ -599,16 +583,36 @@ export function normalizeRoutingFields(input: {
   };
 }
 
+/** Compose sync keeps omitted routing fields. Share the merge with validation
+ * so the admission check sees exactly the routes that will be persisted. */
+export function normalizeComposeRoutingFields(
+  input: Parameters<typeof normalizeRoutingFields>[0],
+  stored?: Parameters<typeof normalizeRoutingFields>[0],
+) {
+  return normalizeRoutingFields({
+    exposed: input.exposed ?? (stored?.exposed || false),
+    exposedPort: input.exposedPort ?? stored?.exposedPort,
+    domain: input.domain ?? stored?.domain,
+    customDomain: input.customDomain ?? stored?.customDomain,
+    domainType: input.domainType ?? stored?.domainType,
+    publicEndpoints: input.publicEndpoints ?? stored?.publicEndpoints,
+  });
+}
+
 // ─── Repository ──────────────────────────────────────────────────────────────
 
 export function createServiceRepo(db: Database, encryption: ConfigurationEncryption) {
   const codec = createConfigurationSecrets(encryption);
 
   function writeUpdate(id: string, data: Partial<NewService>, updatedAt: Date | null = new Date()) {
-    return db
+    const predicate = or(
+      inArray(project.id, db.select({ id: service.projectId }).from(service).where(eq(service.id, id))),
+      data.projectId ? eq(project.id, data.projectId) : undefined,
+    )!;
+    return withProjectConfigurationWrite(db, predicate, async (tx) => tx
       .update(service)
       .set(codec.sealService({ ...data, ...(updatedAt === null ? {} : { updatedAt }) }))
-      .where(eq(service.id, id));
+      .where(eq(service.id, id)).returning());
   }
 
   /** Both Compose writers compare decrypted values before sealing the patch.
@@ -625,7 +629,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
     // Omit the timestamp on metadata-only writes: setting the value we read
     // could backdate a concurrent config edit. RETURNING includes those edits
     // in the result instead of echoing a stale read over the persisted row.
-    const [updated] = await writeUpdate(stored.id, patch, configChanged ? new Date() : null).returning();
+    const [updated] = await writeUpdate(stored.id, patch, configChanged ? new Date() : null);
     if (!updated) throw new Error("Service was removed during Compose synchronization");
     return codec.openService(updated);
   }
@@ -672,6 +676,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       excludingServiceIds: readonly string[] = [],
       excludingNativeProjectId?: string,
       prospective?: { projectId: string; serviceNames: readonly string[] },
+      workspaceId?: string | null,
     ): Promise<number> {
       // Read one snapshot: deployment completion can otherwise land between
       // reading definitions and queued reservations, briefly losing both.
@@ -696,7 +701,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
             .from(service)
             .innerJoin(project, eq(service.projectId, project.id))
             .where(
-              and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`),
+              and(eq(project.organizationId, organizationId), sql`${project.deletedAt} IS NULL`, projectWorkspaceScope(workspaceId)),
             );
           const excluded = new Set(excludingServiceIds);
           const slots = new Set(
@@ -736,6 +741,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
                 sql`${project.deletedAt} IS NULL`,
                 pending,
                 sql`${deployment.meta}->'cloudServiceSlots' IS NOT NULL`,
+                projectWorkspaceScope(workspaceId),
               ),
             );
           for (const row of queued) {
@@ -762,6 +768,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
                 excludingNativeProjectId
                   ? sql`${project.id} <> ${excludingNativeProjectId}`
                   : undefined,
+                projectWorkspaceScope(workspaceId),
                 sql`(
                   (${pending}
                     AND ${deployment.meta}->>'cloudApplicationSlot' = 'true')
@@ -813,7 +820,8 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       // Return the persisted defaults and timestamps. Synthesizing a Service
       // from the input omitted fields such as namespaceVolumes and made create
       // disagree with the next read of the same row.
-      const [row] = await db.insert(service).values(codec.sealService({ id, ...data })).returning();
+      const [row] = await withProjectConfigurationWrite(db, eq(project.id, data.projectId), async (tx) =>
+        tx.insert(service).values(codec.sealService({ id, ...data })).returning());
       return codec.openService(row!);
     },
 
@@ -886,6 +894,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       await db.transaction(async (tx) => {
         const [row] = await tx.select({ projectId: service.projectId }).from(service).where(eq(service.id, id));
         if (row) {
+          await assertProjectConfigurationWritable(tx, eq(project.id, row.projectId));
           const [owner] = await tx.select({ compositeRoutes: project.compositeRoutes })
             .from(project).where(eq(project.id, row.projectId)).for("update");
           const routes = owner?.compositeRoutes ?? [];
@@ -911,7 +920,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
      * FK cascade that would remove them automatically).
      */
     async deleteByProjectId(projectId: string) {
-      await db.delete(service).where(eq(service.projectId, projectId));
+      await withProjectConfigurationWrite(db, eq(project.id, projectId), async (tx) => tx.delete(service).where(eq(service.projectId, projectId)));
     },
 
     /** List only the rows of one kind under a project. */
@@ -1077,14 +1086,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
         const p = composeParsed[i];
         const ex = existingByName.get(p.name);
 
-        const routing = normalizeRoutingFields({
-          exposed: p.exposed ?? (ex?.exposed || false),
-          exposedPort: p.exposedPort ?? ex?.exposedPort,
-          domain: p.domain ?? ex?.domain,
-          customDomain: p.customDomain ?? ex?.customDomain,
-          domainType: p.domainType ?? ex?.domainType,
-          publicEndpoints: p.publicEndpoints ?? ex?.publicEndpoints,
-        });
+        const routing = normalizeComposeRoutingFields(p, ex);
 
         if (ex) {
           // Update existing - preserve the operator's `enabled` choice AND their
@@ -1425,6 +1427,7 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
       appliedAt: Date;
     }) {
       await db.transaction(async tx => {
+        await assertProjectConfigurationWritable(tx, eq(project.id, input.projectId));
         const [parent] = await tx.select().from(deployment).where(and(
           eq(deployment.id, input.deploymentId),
           eq(deployment.projectId, input.projectId),
@@ -1476,3 +1479,4 @@ export function createServiceRepo(db: Database, encryption: ConfigurationEncrypt
     },
   };
 }
+import { projectWorkspaceScope } from "./workspace-scope";

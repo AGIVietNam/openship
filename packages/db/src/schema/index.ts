@@ -1,4 +1,4 @@
-export { user, session, account, verification } from "./auth";
+export { user, session, account, verification, passkey, twoFactor } from "./auth";
 export { externalIdentity, externalNamespace, platformInstance } from "./embedding";
 export { organization, member, invitation } from "./organization";
 export { auditEvent } from "./audit-event";
@@ -32,6 +32,7 @@ export { edgeTargetVerification } from "./edge-target-verification";
 export { serviceIncident, INCIDENT_KINDS, type IncidentKind } from "./service-incident";
 export { cloudWebhookBinding } from "./cloud-webhook-binding";
 export { cloudDockerWorkspace } from "./cloud-docker-workspace";
+export { cloudWorkspace, cloudServerDeletion, type CloudWorkspaceOperation, type CloudWorkspaceActivity, type LinkedCloudServer } from "./cloud-workspace";
 export { projectConnection } from "./project-connection";
 export { webhookDelivery } from "./webhook-delivery";
 export { service, serviceDeployment } from "./service";

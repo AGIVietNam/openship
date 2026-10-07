@@ -22,8 +22,12 @@ import {
 import { ApiError } from "./errors";
 import type { HttpClient } from "./http";
 import { createRemoteResourceOperations } from "./resource-client";
+import { streamWithToken } from "./stream-token";
 
-export function createRemoteProjectOperations(http: HttpClient): ProjectOperations {
+export function createRemoteProjectOperations(
+  http: HttpClient,
+  fetcher: typeof globalThis.fetch = (...args) => globalThis.fetch(...args),
+): ProjectOperations {
   const path = (id: string) => "/projects/" + encodeURIComponent(parseInput(ResourceIdSchema, id));
   function checked<T>(value: unknown, guard: (value: unknown) => value is T): T {
     if (!guard(value)) throw new ApiError("Invalid project response", 502, value);
@@ -36,8 +40,7 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
     });
     return checked(isRecord(response) ? response.data : undefined, isProject);
   }
-  return Object.freeze({
-    ...createRemoteResourceOperations(http, ProjectControlSchemas, {
+  const controls = createRemoteResourceOperations(http, ProjectControlSchemas, {
       getAppSettings: { method: "GET", path: (id) => path(id) + "/app-settings", envelope: "data" },
       updateAppSettings: {
         method: "PATCH",
@@ -270,7 +273,9 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
         path: (id) => path(id) + "/deletion-preview",
         envelope: "preview",
       },
-    }),
+    });
+  return Object.freeze({
+    ...controls,
     async getHome() {
       return checked(await http.request("/projects/home"), isProjectHome);
     },
@@ -295,6 +300,13 @@ export function createRemoteProjectOperations(http: HttpClient): ProjectOperatio
     },
     async *streamServerLogs(id, command = {}, options = {}) {
       const input = parseInput(ServerLogsInputSchema, command);
+      const source = await controls.getServerLogStreamToken(id, input);
+      if (source.kind === "unavailable")
+        throw new ApiError("Request-log streaming is unavailable. Retry later or request recentServerLogs for a snapshot.", 503, { code: "SERVER_LOG_STREAM_UNAVAILABLE" });
+      if (source.kind === "cloud") {
+        yield* streamWithToken(source, fetcher, options);
+        return;
+      }
       const url = http.url(path(id) + "/server-logs/stream");
       if (input.domain !== undefined) url.searchParams.set("domain", input.domain);
       yield* http.events(url.href, { signal: options.signal });

@@ -1,3 +1,4 @@
+import { assertCloudProxyScope } from "../../lib/cloud/scope";
 import { AppError, NotFoundError, OperationError, type AppProjectSchemas } from "@repo/contracts";
 import { UNKNOWN_CAPACITY } from "@repo/core";
 import { repos } from "@repo/db";
@@ -17,8 +18,7 @@ function record(ctx: ExecutionContext, operation: string, resourceId: string, af
   audit.recordAsync(operationAuditContext(ctx), { eventType: "project:write", resourceType: "project", resourceId, after: { operation, ...after as object } });
 }
 async function projectAuthority(ctx: ExecutionContext, id: string) {
-  if (ctx.scopeMode === "fixed" && await resolveProjectAuthority(id, ctx.organizationId) === "cloud")
-    throw new AppError("This cloud link has no tenant mapping. Connect directly with the cloud organizationId.", 409, "CLOUD_SCOPE_UNAVAILABLE");
+  if (await resolveProjectAuthority(id, ctx.organizationId) === "cloud") assertCloudProxyScope(ctx);
 }
 
 export const appDependencies: AppDependencies = {
@@ -59,12 +59,19 @@ export const appDependencies: AppDependencies = {
           { ...ctx, scopeMode: "fixed" },
           { resourceType: "project", resourceId: input.projectId, action: "read" },
         );
+        const project = await repos.project.findByIdInOrganization(input.projectId, ctx.organizationId);
+        if (!project) throw new NotFoundError("Project", input.projectId);
+        if (input.serverId && input.serverId !== project.serverId)
+          throw new AppError("The selected server differs from this project", 409, "PROJECT_SERVER_TARGET_CONFLICT");
+        input = { ...input, serverId: project.serverId ?? undefined };
       }
       if (input.serverId) {
-        await authorization.authorize({ ...ctx, scopeMode: "fixed" }, { resourceType: "server", resourceId: input.serverId, action: "read" });
         const server = await repos.server.getInOrganization(input.serverId, ctx.organizationId);
         if (!server) throw new NotFoundError("Server", input.serverId);
-        await assertServerExecution(server);
+        await authorization.authorize({ ...ctx, scopeMode: "fixed" }, { resourceType: "server", resourceId: server.id, action: "read" });
+        if (server.workspaceId && input.deployTarget && input.deployTarget !== "cloud")
+          throw new AppError("This managed server is a Cloud destination", 409, "PROJECT_SERVER_TARGET_CONFLICT");
+        if (!server.workspaceId) await assertServerExecution(server);
       } else if (process.env.OPENSHIP_NATIVE === "true" && process.env.OPENSHIP_NATIVE_ALLOW_HOST_EXECUTION !== "true") {
         const template = await getTemplateForOrg(ctx.organizationId, id);
         return { minResources: template?.minResources ?? null, capacity: { ...UNKNOWN_CAPACITY }, fit: { ok: true } };

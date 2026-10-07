@@ -120,6 +120,7 @@ export function presentProject(row: unknown): Project {
   const data = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
   delete data.cloneTokenEncrypted;
   delete data.webhookSecret;
+  delete data.cloudPromotion;
   if (!isProject(data))
     throw new AppError("Invalid project presentation", 500, "INVALID_PROJECT_RESPONSE");
   return data;

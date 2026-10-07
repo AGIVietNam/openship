@@ -15,21 +15,21 @@ import chalk from "chalk";
 import { getShipClient } from "../lib/ship-client";
 import { printJson, printTable, isJsonMode, ok, info } from "../lib/output";
 import { spin, fail } from "../lib/cmd-helpers";
+import { positiveInteger } from "../lib/command-input";
 
 import type { TCreateTokenBody } from "@repo/sdk";
 type Grant = NonNullable<TCreateTokenBody["grants"]>[number];
 
 /** Parse a repeatable `--grant type:id:perm1,perm2` into the API's grant shape. */
 function collectGrant(value: string, acc: Grant[]): Grant[] {
-  const [resourceType, resourceId, permsRaw] = value.split(":");
-  if (!resourceType || !resourceId || !permsRaw) {
+  const [resourceType, resourceId, permsRaw, extra] = value.split(":");
+  if (!resourceType || !resourceId || !permsRaw || extra !== undefined) {
     throw new Error(`Invalid --grant "${value}". Expected type:id:perm1,perm2`);
   }
   const permissions = permsRaw.split(",").map((p) => p.trim()).filter(Boolean);
   if (permissions.some(p => !["read", "write", "admin", "create"].includes(p)))
     throw new Error(`Invalid permission in --grant "${value}"`);
-  acc.push({ resourceType, resourceId, permissions: permissions as Grant["permissions"] });
-  return acc;
+  return [...acc, { resourceType, resourceId, permissions: permissions as Grant["permissions"] }];
 }
 
 const listCmd = new Command("list")
@@ -63,7 +63,7 @@ const createCmd = new Command("create")
   .description("Mint a new personal access token (the secret is shown once)")
   .argument("<name>", "Human-readable token name")
   .option("--read-only", "Reject mutation methods (POST/PUT/PATCH/DELETE)", false)
-  .option("--expires <days>", "Expire after N days (1–365); omit for non-expiring", (v) => parseInt(v, 10))
+  .option("--expires <days>", "Expire after N days (1–365); omit for non-expiring", positiveInteger)
   .option(
     "--grant <type:id:perms>",
     "Scope the token to a resource (repeatable), e.g. project:abc123:read,write",

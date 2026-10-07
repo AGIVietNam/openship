@@ -1,8 +1,9 @@
+import { acquireServerExecution } from "../../lib/server-execution";
 /** Server setup sessions and monitoring, independent of HTTP stream lifetimes. */
 import type { ServerDependencies } from "../../../servers";
 import { OperationError, type DeploymentEvent } from "@repo/contracts";
 import {
-  COMPONENT_INSTALLERS, checkComponents, ensureEdge, recoverInterruptedTakeover, SERVER_STATS_COMMAND,
+  COMPONENT_INSTALLERS, checkComponents, ensureEdge, recoverInterruptedTakeover, readServerStats,
   getSystemComponentDefinition, resolveSystemComponentInstallPlan, type PromptUserFn,
 } from "@repo/adapters";
 import { safeErrorMessage } from "@repo/core";
@@ -13,7 +14,7 @@ import { authorization } from "../../lib/authorization";
 import { audit, operationAuditContext } from "../../lib/audit-emitter";
 import { sshManager } from "../../lib/ssh-manager";
 import { withPinnedEdgeImage } from "../../lib/edge-image";
-import { resolveAcmeProviderOptions } from "../../lib/acme-config";
+import { resolveEdgeProviderOptions } from "../../lib/edge-provider-options";
 import { assertSelfHosted, assertServerExecution, requireSelfHostedServer } from "./server-access";
 import { ALLOWED_COMPONENTS, deliverEdgeBeforeInstall, installPrerequisites, dependencyFailureMessage, failSystem } from "./server-check.operations";
 import { refreshServerContainer } from "./server-containers.service";
@@ -44,7 +45,8 @@ export const serverInstallationDependencies: NonNullable<ServerDependencies["ins
     return subscriptionEvents(writer => subscribeSetupSession(sessionId, writer), signal);
   },
   async start(ctx, serverId, body, signal) {
-    await assertServerExecution(await requireSelfHostedServer(ctx, serverId));
+    const server = await requireSelfHostedServer(ctx, serverId);
+    await assertServerExecution(server);
     signal?.throwIfAborted();
     const validNames = body.components.filter(name => ALLOWED_COMPONENTS.has(name));
     if (validNames.length === 0) return failSystem({ error: "Invalid component names" }, 400);
@@ -167,7 +169,7 @@ export const serverInstallationDependencies: NonNullable<ServerDependencies["ins
                 acmeEmail: config?.acmeEmail,
                 edgeImage: config.edgeImage,
                 nginx: {
-                  ...resolveAcmeProviderOptions(),
+                  ...(await resolveEdgeProviderOptions(server)),
                   ...(config?.acmeEmail ? { acmeEmail: config.acmeEmail } : {}),
                 },
               },
@@ -231,25 +233,24 @@ export const serverInstallationDependencies: NonNullable<ServerDependencies["ins
     return source;
   },
   async monitor(ctx, serverId, signal) {
-    await assertServerExecution(await requireSelfHostedServer(ctx, serverId));
-    return monitorServer(serverId, signal);
+    return monitorServer(ctx.organizationId, serverId, signal);
   },
 };
 
-async function* monitorServer(serverId: string, signal?: AbortSignal): AsyncGenerator<DeploymentEvent> {
+async function* monitorServer(organizationId: string, serverId: string, signal?: AbortSignal): AsyncGenerator<DeploymentEvent> {
   const POLL_INTERVAL = 3_000;
-  const STATS_TIMEOUT_MS = 12_000;
   signal?.throwIfAborted();
-  sshManager.retain(serverId);
+  const connection = await acquireServerExecution(organizationId, serverId);
   try {
+    signal?.throwIfAborted();
     while (!signal?.aborted) {
       try {
         // Metrics samples keep the retained non-breaking acquire/exec path.
-        const executor = await sshManager.acquire(serverId);
-        const raw = await executor.exec(SERVER_STATS_COMMAND, { timeout: STATS_TIMEOUT_MS });
+        const stats = await connection.run(executor => signal && executor.runWithAbortSignal
+          ? executor.runWithAbortSignal(signal, () => readServerStats(executor))
+          : readServerStats(executor));
         if (signal?.aborted) break;
-        JSON.parse(raw);
-        yield { event: "stats", data: raw };
+        yield { event: "stats", data: JSON.stringify(stats) };
       } catch (error) {
         if (signal?.aborted) break;
         yield { event: "error", data: JSON.stringify({ error: safeErrorMessage(error) }) };
@@ -262,5 +263,5 @@ async function* monitorServer(serverId: string, signal?: AbortSignal): AsyncGene
         signal?.addEventListener("abort", finish, { once: true });
       });
     }
-  } finally { sshManager.release(serverId); }
+  } finally { await connection.release(); }
 }

@@ -5,7 +5,7 @@
  * without a round-trip on every invocation.
  */
 import type { ContextCaps } from "./config";
-import { getActiveContext, getContext, updateContext } from "./config";
+import { getActiveContext, getApiUrl, getContext, updateContext } from "./config";
 import { getShipClient, getRemoteClient, isNativeMode, ApiError } from "./ship-client";
 
 export type { ContextCaps } from "./config";
@@ -45,7 +45,7 @@ export async function fetchCaps(opts?: { force?: boolean; context?: string }): P
     cloudApiUrl: body.cloudApiUrl ?? null,
     fetchedAt: Date.now(),
   };
-  updateContext(name, { caps });
+  updateContext(name, { caps }, getApiUrl(name));
   return caps;
 }
 

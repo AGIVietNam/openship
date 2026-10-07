@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, type RequestOptions } from "./client";
 import type { DeploymentPage, ListDeploymentsInput } from "@repo/contracts";
 import { endpoints } from "./endpoints";
 import type {
@@ -383,8 +383,8 @@ export const deployApi = {
   }) => api.post<any>(endpoints.deploy.buildAccess, payload),
 
   /** Poll build status */
-  getBuildStatus: (deploymentId: string) =>
-    api.get<any>(endpoints.deploy.buildStatus(deploymentId)),
+  getBuildStatus: (deploymentId: string, options?: RequestOptions) =>
+    api.get<any>(endpoints.deploy.buildStatus(deploymentId), options),
 
   /** Start a build by deployment ID */
   buildStart: (deployment_id: string) => api.post<any>(endpoints.deploy.buildStart(deployment_id)),

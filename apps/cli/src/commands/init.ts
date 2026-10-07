@@ -14,11 +14,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { join } from "node:path";
-import { getShipClient, nativeSession, ApiError } from "../lib/ship-client";
+import { getShipClient, getRemoteClient, getCommandOrganization, nativeSession, ApiError } from "../lib/ship-client";
 import { iteratePages } from "@repo/sdk/client";
 import type { ProjectLink } from "../lib/project-link";
 import { getActiveContext } from "../lib/config";
 import { err, info, isJsonMode, ok, printJson } from "../lib/output";
+import { parseDeploymentEnvironment } from "../lib/command-input";
 
 interface ProjectRow {
   id: string;
@@ -30,7 +31,7 @@ interface ProjectRow {
 export const initCommand = new Command("init")
   .description("Link the current directory to an Openship project (.openship/project.json)")
   .option("--project <id>", "Project id to link (skips the picker)")
-  .option("--environment <name>", "Default deploy environment", "production")
+  .option("--environment <name>", "Default deploy variable set: production | preview", "production")
   .option("--dir <path>", "Directory to initialize", process.cwd())
   .option("--force", "Overwrite an existing project link")
   .option("-y, --yes", "Non-interactive: fail instead of prompting")
@@ -38,6 +39,7 @@ export const initCommand = new Command("init")
     const root: string = opts.dir || process.cwd();
     const linkDir = join(root, ".openship");
     const linkPath = join(linkDir, "project.json");
+    const environment = parseDeploymentEnvironment(opts.environment);
 
     if (existsSync(linkPath) && !opts.force) {
       err(`Already linked (${linkPath}). Re-run with --force to overwrite.`);
@@ -49,6 +51,10 @@ export const initCommand = new Command("init")
 
     try {
       if (!projectId) {
+        if (opts.yes || isJsonMode() || !input.isTTY) {
+          err("Pass --project <id> in non-interactive mode.");
+          exitCommand(1);
+        }
         const projects: ProjectRow[] = [];
         for await (const p of iteratePages(getShipClient().projects.list, { perPage: 100 })) {
           projects.push(p);
@@ -56,11 +62,6 @@ export const initCommand = new Command("init")
 
         if (projects.length === 0) {
           err("No projects found for the active context. Create one in the dashboard first.");
-          exitCommand(1);
-        }
-
-        if (opts.yes) {
-          err("Multiple projects available; pass --project <id> in non-interactive mode.");
           exitCommand(1);
         }
 
@@ -99,8 +100,8 @@ export const initCommand = new Command("init")
       ...(picked?.slug ? { slug: picked.slug } : {}),
       ...(session
         ? { native: { instanceId: session.ship.instanceId, organizationId: session.client.organizationId } }
-        : { context: getActiveContext() }),
-      defaults: { environment: opts.environment || "production" },
+        : { context: getActiveContext(), apiUrl: getRemoteClient().http.apiUrl, organizationId: getCommandOrganization() }),
+      defaults: { environment },
     };
 
     mkdirSync(linkDir, { recursive: true });

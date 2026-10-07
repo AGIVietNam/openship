@@ -15,6 +15,7 @@ import { getShipClient, assertLinkedProjectConnection, ApiError } from "../lib/s
 import { streamDeploymentLogs } from "../lib/deploy-stream";
 import { isJsonMode, printJson, err } from "../lib/output";
 import { readProjectLink } from "../lib/project-link";
+import { timeoutMilliseconds } from "../lib/command-input";
 
 /**
  * Latest deployment ID for the linked project, or null if the directory isn't
@@ -35,6 +36,7 @@ export const logsCommand = new Command("logs")
   .argument("[deploymentId]", "Deployment ID (defaults to the latest deployment of the linked project)")
   .option("-f, --follow", "Stream live logs via SSE until the deployment finishes")
   .option("--tail <n>", "Show only the last N log lines (snapshot mode)")
+  .option("--timeout <ms>", "Maximum follow duration; timing out leaves the deployment running", timeoutMilliseconds, 600_000)
   .action(async (deploymentIdArg: string | undefined, opts) => {
     let deploymentId = deploymentIdArg;
     if (!deploymentId) {
@@ -56,7 +58,7 @@ export const logsCommand = new Command("logs")
 
     if (opts.follow) {
       try {
-        const result = await streamDeploymentLogs(deploymentId);
+        const result = await streamDeploymentLogs(deploymentId, opts.timeout);
         if (result.success === false || result.status === "cancelled") exitCommand(1);
       } catch (e) {
       rethrowCommandExit(e);

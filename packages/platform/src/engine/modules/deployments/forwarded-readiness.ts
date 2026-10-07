@@ -28,7 +28,7 @@
 
 import type { Duplex } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { waitForReady, type CommandExecutor } from "@repo/adapters";
+import { LocalExecutor, waitForReady, type CommandExecutor } from "@repo/adapters";
 import { safeErrorMessage, shellQuote } from "@repo/core";
 
 interface ReadinessOptions {
@@ -369,8 +369,9 @@ async function waitForExecReady(
  * Probe `host:port` from the machine `executor` represents.
  *
  * Forwarding first; a channel that refuses it falls back to a host-side HTTP client
- * rather than reporting the app dead. A LocalExecutor (non-containerized install) has
- * no `forwardPort` and needs neither hop — its own sockets already sit on the host.
+ * rather than reporting the app dead. Only LocalExecutor may use this process's
+ * sockets. Other transports without forwarding (including managed servers) probe
+ * through their executor so the controller's loopback can never answer for an app.
  */
 export async function waitForReadyFromExecutor(
   executor: CommandExecutor,
@@ -379,7 +380,15 @@ export async function waitForReadyFromExecutor(
   opts: ReadinessOptions = {},
 ): Promise<ExecutorReadinessResult> {
   if (!executor.forwardPort) {
-    return { ready: await waitForReady(host, port, opts), via: "socket" };
+    if (executor instanceof LocalExecutor) {
+      return { ready: await waitForReady(host, port, opts), via: "socket" };
+    }
+    const result = await waitForExecReady(executor, host, port, opts);
+    return {
+      ready: result.ready,
+      via: "exec",
+      ...(result.unavailable ? { unverifiable: result.unavailable } : {}),
+    };
   }
 
   const startedAt = Date.now();

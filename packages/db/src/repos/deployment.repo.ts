@@ -5,7 +5,7 @@ import type { Database } from "../connection";
 import { createConfigurationSecrets, type ConfigurationEncryption } from "../configuration-secrets";
 import { deployment, buildSession, project, service } from "../schema";
 import { detailOf } from "./storable-detail";
-import { withProjectWorkAdmission } from "./project-work-admission";
+import { assertProjectConfigurationWritable, withProjectConfigurationWrite, withProjectWorkAdmission } from "./project-work-admission";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -782,13 +782,14 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
         .where(eq(deployment.id, id));
     },
 
-    /** Toggle the user-tagged pin. The endpoint enforces the per-project
-     *  pin cap before calling this; this method is unguarded. */
+    /** Toggle the user-tagged pin. The endpoint enforces the per-project cap;
+     * this write also participates in promotion's configuration fence. */
     async setPinned(id: string, pinned: boolean) {
-      await db
+      const predicate = inArray(project.id, db.select({ id: deployment.projectId }).from(deployment).where(eq(deployment.id, id)));
+      await withProjectConfigurationWrite(db, predicate, async (tx) => tx
         .update(deployment)
         .set({ pinned, updatedAt: new Date() })
-        .where(eq(deployment.id, id));
+        .where(eq(deployment.id, id)));
     },
 
     /** Count pinned ready deployments for a project. Used by the pin
@@ -842,7 +843,7 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
      * `durationMs` for the org's deployments started in [from, to]. Openship's
      * own metric (Oblien does not meter build separately). Bounded by period.
      */
-    async sumBuildMillisForOrg(organizationId: string, from: Date, to: Date): Promise<number> {
+    async sumBuildMillisForOrg(organizationId: string, from: Date, to: Date, workspaceId?: string | null): Promise<number> {
       const [row] = await db
         .select({ total: sql<number>`coalesce(sum(${buildSession.durationMs}), 0)` })
         .from(buildSession)
@@ -852,6 +853,7 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
             eq(deployment.organizationId, organizationId),
             gte(buildSession.startedAt, from),
             lte(buildSession.startedAt, to),
+            deploymentWorkspaceScope(workspaceId),
           ),
         );
       return Number(row?.total ?? 0);
@@ -959,6 +961,8 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
 
     async deleteDeployment(id: string): Promise<boolean> {
       return db.transaction(async (tx) => {
+        await assertProjectConfigurationWritable(tx, inArray(project.id,
+          tx.select({ id: deployment.projectId }).from(deployment).where(eq(deployment.id, id))));
         const [row] = await tx
           .select({ id: deployment.id, projectId: deployment.projectId })
           .from(deployment)
@@ -996,3 +1000,4 @@ export function createDeploymentRepo(db: Database, encryption: ConfigurationEncr
     },
   };
 }
+import { deploymentWorkspaceScope } from "./workspace-scope";

@@ -60,6 +60,7 @@
   "fix": "Onar",
   "install": "Kur",
   "update": "Güncelle",
+  "updating": "Güncelleniyor…",
   "mailSetup": "E-posta kurulumu",
   "selfUpdateNote": "Bu kurulum kendini komut satırından günceller.",
   "empty": {

@@ -1,59 +1,43 @@
 # Complimentary Cloud plans
 
-The SaaS operator can grant a catalog plan without charging the customer. Run the
-CLI in the deployed API container so it uses that instance's PostgreSQL database
-and Oblien credentials. Deploy migration `0146_billing_plan_grant` and the API
-changes before using it. The CLI verifies the deployed schema; it does not run
-migrations or open a live PGlite database.
+New monthly servers require verified provider funding. The operator CLI cannot
+purchase monthly capacity by granting namespace credits and rejects new grants
+with `BILLING_CAPACITY_FUNDING_REQUIRED`. Arrange a funded or explicitly subsidized
+capacity contract with Oblien instead; a zero customer price does not make the
+infrastructure free. Ordinary monthly checkout remains provider-managed.
 
-Preview and issue a grant:
+## Previously saved metered grants
 
-```sh
-docker compose exec api bun run --cwd apps/api billing:grant grant \
-  --email user@example.com --plan pro --reason "Partner account" --dry-run
+Existing grants remain separate from hosted subscriptions. They retain their
+saved application limits, resource policy and monthly credit allowance. Oblien
+continues to meter usage under its Mode A policy/reset API; the operator's account
+covers that consumption. No catalog change upgrades them to monthly capacity.
 
-docker compose exec api bun run --cwd apps/api billing:grant grant \
-  --email user@example.com --plan pro --reason "Partner account"
-```
-
-The default is monthly renewal until revoked. Repeating the same command reuses
-the existing grant and preserves credits already consumed. `--expires` accepts a
-future ISO timestamp, such as `2026-11-01T00:00:00Z`. A different plan or duration
-requires revoking the existing grant first.
-
-Inspect or revoke:
+Run the CLI in the deployed API container so it uses that instance's PostgreSQL
+database and Oblien credentials. It verifies the schema without running migrations
+or opening another live PGlite connection.
 
 ```sh
 docker compose exec api bun run --cwd apps/api billing:grant show --email user@example.com
 docker compose exec api bun run --cwd apps/api billing:grant revoke --email user@example.com
 ```
 
-The CLI resolves the email case-insensitively and selects its personal owned
-workspace. Use `--organization <id>` for another owned workspace. Ambiguous users,
-non-owned workspaces, and existing hosted/legacy subscriptions are rejected.
-`--operator <name>` overrides the OS username recorded with the mandatory reason.
-No email or organization is embedded in the implementation.
+The CLI selects an owned organization by email; `--organization <id>` and
+`--workspace <id>` select another owned organization or managed server. Ambiguous
+users, non-owned servers and grants that would replace hosted subscriptions are
+rejected. `--operator <name>` records the responsible operator. No email or
+organization is embedded in the implementation.
 
-The saved grant contains the catalog's application limits, resource policy and
-monthly credit allowance at issuance. Oblien continues to meter usage and enforce
-the namespace budget. This uses Oblien's Mode A policy/reset API; ordinary paid
-subscriptions remain on Mode B. The customer's price is zero, and the operator's
-Oblien account covers the actual resource consumption.
+Repeating `grant` with the saved plan and duration, plus a reason and operator can
+reuse that existing grant; it cannot create a new monthly plan. `--dry-run` makes
+no writes. Revoking an old grant does not make a new grant purchasable.
 
-The existing five-minute billing reconciliation job and normal entitlement checks
-renew each complimentary allowance at its monthly anniversary. The provider uses
-the period-end timestamp to deduplicate resets, including retries after a crash.
-Ordinary reads within the period do not reset credits. Exhaustion still blocks
-new Cloud spending. Revocation/expiry removes the grant's allowance and restores
-the free resource policy; it preserves provider usage and purchased-credit history.
+The existing reconciliation job renews saved metered allowances at their monthly
+anniversary. The provider deduplicates resets by period end. Reads do not reset
+consumed credit; exhaustion still blocks new spending. Revocation or expiry removes
+the allowance and restores the free policy while preserving usage and history.
 
-Grants are separate from hosted subscriptions: the application reports a
-`complimentary` record and a zero-price plan, with no fabricated subscription or
-payment. Paid checkout is disabled until the operator revokes the grant. If a
-previously opened checkout completes, the hosted subscription permanently
-supersedes the grant. Cancellation cannot resurrect it.
-
-Only an operator with database/provider access can issue grants. Tenant settings,
-organization metadata, and instance export/import cannot grant this entitlement.
-Keep these source changes in subsequent API builds so persisted grants continue
-to reconcile after a redeployment.
+The API exposes `complimentary` and a zero-price plan without fabricating a paid
+subscription. Paid checkout requires revocation first. If an earlier checkout
+settles, the hosted subscription supersedes the grant permanently; cancellation
+does not resurrect it. Tenant settings and export/import cannot grant access.

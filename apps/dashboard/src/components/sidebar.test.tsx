@@ -8,9 +8,12 @@ import { issuesApi, type IssueCounts } from "@/lib/api/issues";
 import { getActiveOrganizationId, setActiveOrganizationId } from "@/lib/api/client";
 import { useIssueCounts } from "@/hooks/useIssueCounts";
 import { Sidebar } from "./sidebar";
+import { SidebarLayoutProvider, useSidebarCollapseRequest } from "@/context/SidebarLayoutContext";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/monitoring",
+  widePlans: false,
+  cloudConnected: false,
   summary: vi.fn(),
   feed: vi.fn(),
   organization: vi.fn(),
@@ -33,7 +36,7 @@ vi.mock("@/lib/auth-client", () => ({
 vi.mock("@/context/AuthContext", () => ({
   useAuth: () => ({ user: { id: "user-a", name: "Operator" } }),
 }));
-vi.mock("@/context/CloudContext", () => ({ useCloud: () => ({ connected: false }) }));
+vi.mock("@/context/CloudContext", () => ({ useCloud: () => ({ connected: mocks.cloudConnected }) }));
 vi.mock("@/context/PlatformContext", () => ({
   usePlatform: () => ({ selfHosted: true, deployMode: "docker", productView: "platform" }),
 }));
@@ -64,6 +67,8 @@ let host: HTMLDivElement;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.pathname = "/monitoring";
+  mocks.widePlans = false;
+  mocks.cloudConnected = false;
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.organization.mockResolvedValue({ data: { id: "org-a" } });
@@ -81,11 +86,43 @@ afterEach(async () => {
   vi.useRealTimers();
   setActiveOrganizationId(null);
 });
+function PlanLayoutRequest() {
+  useSidebarCollapseRequest(mocks.pathname === "/billing/plans" && mocks.widePlans);
+  return null;
+}
+
+it("shows Support last when the self-hosted account connects to Cloud, and removes it on disconnect", async () => {
+  await render();
+  expect(host.querySelector('a[href="/support"]')).toBeNull();
+  mocks.cloudConnected = true;
+  await render();
+  const links = [...host.querySelectorAll('nav a[href]')];
+  expect(links.at(-1)?.getAttribute("href")).toBe("/support");
+  mocks.cloudConnected = false;
+  await render();
+  expect(host.querySelector('a[href="/support"]')).toBeNull();
+});
+
+it.each([
+  { workspaceId: "managed-workspace" },
+  { deployTarget: "cloud" },
+  { source: "cloud" },
+])("keeps Support reachable for an existing Cloud project when disconnected: %o", async (cloudProject) => {
+  mocks.projects.mockResolvedValue({ success: true, projects: [{ id: "cloud-project", ...cloudProject }] });
+  await render();
+  expect(host.querySelector('nav a[href="/support"]')).not.toBeNull();
+  expect(host.querySelector('nav a[href="/billing"]')).toBeNull();
+  expect(mocks.projects).toHaveBeenCalledOnce();
+});
+
 async function render(props: ComponentProps<typeof Sidebar> = {}) {
   await act(async () =>
     root.render(
       <I18nProvider>
-        <Sidebar {...props} />
+        <SidebarLayoutProvider>
+          <Sidebar {...props} />
+          <PlanLayoutRequest />
+        </SidebarLayoutProvider>
       </I18nProvider>,
     ),
   );
@@ -103,7 +140,7 @@ async function navigate(pathname: string) {
 
 describe("Sidebar collapse", () => {
   it.each([
-    ["/billing/plans", false],
+    ["/billing/plans", true],
     ["/billing/overview", true],
     ["/billing/usage", true],
   ])("opens %s with sidebar expanded=%s on direct entry", async (pathname, expanded) => {
@@ -112,6 +149,7 @@ describe("Sidebar collapse", () => {
   });
 
   it("temporarily collapses when opening plans from Home and starts each visit compact", async () => {
+    mocks.widePlans = true;
     await navigate("/");
     expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
     await navigate("/billing/plans");
@@ -126,6 +164,7 @@ describe("Sidebar collapse", () => {
   });
 
   it("restores a collapsed preference after manually expanding plans", async () => {
+    mocks.widePlans = true;
     await navigate("/");
     await act(async () => sidebarToggle().click());
     expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
@@ -137,6 +176,7 @@ describe("Sidebar collapse", () => {
   });
 
   it("keeps temporary expansion separate between Scale and plans", async () => {
+    mocks.widePlans = true;
     await navigate("/scale");
     await act(async () => sidebarToggle().click());
     expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
@@ -150,6 +190,7 @@ describe("Sidebar collapse", () => {
   });
 
   it("opens the mobile drawer fully without changing the desktop preference", async () => {
+    mocks.widePlans = true;
     await navigate("/billing/plans");
     const onCloseMobile = vi.fn();
     await render({ mobileOpen: true, onCloseMobile });
@@ -161,6 +202,21 @@ describe("Sidebar collapse", () => {
     await navigate("/");
     expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
   });
+
+  it("waits for a wide comparison and preserves manual expansion when its layout changes", async () => {
+    await navigate("/billing/plans");
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    mocks.widePlans = true;
+    await render();
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("false");
+    await act(async () => sidebarToggle().click());
+    mocks.widePlans = false;
+    await render();
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+    mocks.widePlans = true;
+    await render();
+    expect(sidebarToggle().getAttribute("aria-expanded")).toBe("true");
+  });
 });
 
 describe("Monitoring sidebar count", () => {
@@ -170,7 +226,7 @@ describe("Monitoring sidebar count", () => {
       projects: [{ id: "project-a" }, { id: "project-b", isApp: true }, { id: "project-a" }],
     });
     await render();
-    expect(host.querySelector('a[href="/projects"] .tabular-nums')?.textContent).toBe("2");
+    expect(host.querySelector('a[href="/projects"] .tabular-nums')?.textContent).toBe("1");
     expect(badge()?.textContent).toBe("3");
     expect(monitoring().textContent).toContain(baseDictionary.dashboard.nav.issues);
     await act(async () => sidebarToggle().click());

@@ -3,17 +3,12 @@ import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import type { AppOperations, InstallAppInput, ProjectOperations } from "@repo/sdk";
 import { getShipClient } from "../lib/ship-client";
-import { fail } from "../lib/cmd-helpers";
-import { printJson, printTable } from "../lib/output";
+import { fail, printResult as data } from "../lib/cmd-helpers";
+import { printTable } from "../lib/output";
 
 async function inputFile<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(file, "utf8"));
 }
-async function data(work: () => Promise<unknown>): Promise<void> {
-  try { printJson(await work()); }
-  catch (error) { fail(error); }
-}
-
 export const appCommand = new Command("app").description("Browse, install, and configure catalog apps");
 
 appCommand.addCommand(new Command("list").aliases(["ls", "catalog"])

@@ -93,6 +93,32 @@ export function requestDeploymentCancellation(
   return true;
 }
 
+/** The worker owns the resolved build runtime. The request handler's default
+ * platform may target a different host or even use a different runtime (desktop
+ * Bare versus server Docker). Bind the actual adapter here so both local
+ * requests and durable cancellation observed by another process stop its work.
+ * The returned disposer must finish before the worker disposes its transports
+ * or acknowledges completion: cancellation itself may still be cleaning up. */
+export function bindDeploymentBuildCancellation(
+  signal: AbortSignal | undefined,
+  cancelBuild: () => Promise<void>,
+): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  const cancel = () => {
+    pending ??= Promise.resolve().then(cancelBuild).catch(error => {
+      // A failed interruption is not evidence that the worker stopped. Its
+      // normal execution/finally must still finish before releasing the lease.
+      console.error("[DEPLOY] Build interruption failed; waiting for the worker to stop:", error);
+    });
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  return async () => {
+    signal?.removeEventListener("abort", cancel);
+    await pending;
+  };
+}
+
 /** Release only the controller registered by this worker; never delete a newer
  * execution if an id is ever reused by an integration test or import path. */
 export function releaseDeploymentExecution(deploymentId: string, signal: AbortSignal): void {

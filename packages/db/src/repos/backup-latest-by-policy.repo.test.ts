@@ -67,6 +67,41 @@ describe("repos.backupRun.latestByPolicy", () => {
     expect(res).toBeUndefined();
   });
 
+  it("bounds size history to three successful undeleted runs of the exact policy and source", async () => {
+    const base = {
+      policyId: "pol1",
+      destinationId: "dest1",
+      serviceId: "svc1",
+      mailServerId: null,
+      projectId: "p1",
+      organizationId: "org1",
+      status: "succeeded",
+      triggeredBy: "pre_deploy",
+    };
+    const later = new Date("2026-10-01T12:00:00Z");
+    await repos.db
+      .insert(schema.backupRun)
+      .values([
+        ...[1, 2, 3, 4].map((index) => ({
+          ...base,
+          id: `history-${index}`,
+          finishedAt: new Date(`2026-10-01T0${index}:00:00Z`),
+        })),
+        { ...base, id: "wrong-policy", policyId: "pol2", finishedAt: later },
+        { ...base, id: "wrong-destination", destinationId: "dest2", finishedAt: later },
+        { ...base, id: "sibling-service", serviceId: "svc2", finishedAt: later },
+        { ...base, id: "mail-source", serviceId: null, mailServerId: "mail1", finishedAt: later },
+        { ...base, id: "wrong-mail", mailServerId: "mail1", finishedAt: later },
+        { ...base, id: "failed", status: "failed", finishedAt: later },
+        { ...base, id: "deleted", deletedAt: later, finishedAt: later },
+      ]);
+    const recent = await repos.run.recentSucceededForSource("pol1", "dest1", "svc1", null);
+    expect(recent.map((run) => run.id)).toEqual(["history-4", "history-3", "history-2"]);
+    const mail = await repos.run.recentSucceededForSource("pol1", "dest1", null, "mail1");
+    expect(mail.map((run) => run.id)).toEqual(["mail-source"]);
+    expect(await repos.run.recentSucceededForSource("pol1", "dest1", "unknown", null)).toEqual([]);
+  });
+
   it("keeps a moved policy's latest run scoped to the displayed destination", async () => {
     await repos.db.insert(schema.backupRun).values([
       { id: "old-storage", policyId: "pol1", organizationId: "org1", destinationId: "dest1", projectId: "p1", status: "succeeded", triggeredBy: "manual", startedAt: new Date("2026-09-24T10:00:00Z"), bytesTransferred: 100 },

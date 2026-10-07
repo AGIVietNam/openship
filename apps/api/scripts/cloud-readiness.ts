@@ -12,7 +12,6 @@ record("Cloud mode", process.env.CLOUD_MODE === "true");
 record("Oblien credentials configured", Boolean(clientId && clientSecret));
 record("Webhook secret configured", Boolean(process.env.OBLIEN_WEBHOOK_SECRET));
 record("Subscription purchases enabled", process.env.BILLING_ENABLED === "true");
-record("Credit purchases enabled", process.env.BILLING_TOPUPS_ENABLED === "true");
 
 const billing = new OblienBillingApi({ clientId, clientSecret, baseUrl: apiBase });
 const checks = await Promise.allSettled([
@@ -23,6 +22,10 @@ const checks = await Promise.allSettled([
       true,
       "Supports saved offers, renewal grace and namespace resource caps",
     );
+  })(),
+  (async () => {
+    const catalog = await billing.assertMonthlyCapacitySupport();
+    record("Monthly capacity purchases", true, `Stripe monthly capacity is published under ${catalog.tariffId}`);
   })(),
   (async () => {
     const defaults = await billing.getDefaults();
@@ -72,8 +75,10 @@ const checks = await Promise.allSettled([
     const [state, entitlement] = await Promise.all([billing.getSubscription(namespace), billing.getEntitlement(namespace)]);
     assertOblienEntitlementMatchesSubscription(entitlement, state.subscription);
     record("Namespace entitlement and subscription", true, "The namespace's tier and billing period agree");
-    record("Finite namespace allowance", entitlement.quota.limit !== null || entitlement.tierId === "enterprise",
-      "Consumer namespaces must not inherit unlimited account-owner credit");
+    record("Namespace billing contract", entitlement.tierId === "capacity" || entitlement.quota.limit !== null || entitlement.tierId === "enterprise",
+      entitlement.tierId === "capacity"
+        ? "Verified capacity contract; no secondary compute-credit allowance"
+        : "Metered namespaces must not inherit unlimited account-owner credit");
   })(),
 ]);
 checks.forEach((result, index) => {
@@ -83,6 +88,7 @@ checks.forEach((result, index) => {
     record(
       [
         "Provider reseller contract",
+        "Monthly capacity purchases",
         "Namespace default policy",
         "Webhook registration",
         "Namespace entitlement and subscription",

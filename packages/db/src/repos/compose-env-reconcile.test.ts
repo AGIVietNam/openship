@@ -57,6 +57,10 @@ function harness(initial = existingService(), hasScopedEnvironment = false) {
   let stored = structuredClone(initial);
   const writes: Array<Record<string, unknown>> = [];
   const db = {
+    transaction: async (run: (tx: Database) => Promise<unknown>) => run(db),
+    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({
+      for: async () => [{ deletionInProgress: false, cloudPromotion: null }],
+    }) }) }) }),
     query: {
       service: { findMany: async () => [stored] },
       envVar: { findFirst: async () => (hasScopedEnvironment ? { id: "env_saved" } : undefined) },

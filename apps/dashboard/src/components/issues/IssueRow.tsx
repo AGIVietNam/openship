@@ -4,7 +4,7 @@ import { Icon as UiIcon } from "@repo/ui/icons";
 
 import Link from "next/link";
 
-import type { SystemIssue } from "@/lib/api/issues";
+import { issueUpdateInProgress, type SystemIssue } from "@/lib/api/issues";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import CopyCommand, { SELF_UPDATE_COMMAND } from "@/components/shared/CopyCommand";
 import {
@@ -66,6 +66,8 @@ export function IssueRow({
   // call the home Updates card makes.
   const selfUpdate = issue.kind === "update_available" && issue.scope === "platform";
   const fix = issue.resolveWith[0];
+  const updating = issue.kind === "update_available" && (busy || issueUpdateInProgress(issue));
+  const resolving = busy || updating;
 
   // `expiresAt` counts DOWN (a held deploy aborts if unanswered), so `timeAgo` —
   // which reads a past instant — would render it as "just now". Minutes remaining,
@@ -135,11 +137,12 @@ export function IssueRow({
           <button
             type="button"
             onClick={() => onResolve(issue)}
-            disabled={busy}
+            disabled={resolving}
+            aria-busy={resolving}
             className={actionClass}
           >
-            {busy && <UiIcon name="spinner" className="size-3 animate-spin" />}
-            {fix.label}
+            {resolving && <UiIcon name="spinner" className="size-3 animate-spin" />}
+            {updating ? c.updating : fix.label}
           </button>
         ) : issue.kind === "mail_down" ? (
           // A gone mail engine has no fix from here — recreating it needs the secrets

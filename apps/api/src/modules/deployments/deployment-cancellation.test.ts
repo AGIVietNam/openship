@@ -18,6 +18,7 @@ vi.mock("@repo/db", () => ({
 
 import {
   DeploymentCancelledError,
+  bindDeploymentBuildCancellation,
   completeDeploymentExecution,
   deploymentCancellationKeepsProvisioned,
   drainDeploymentExecutions,
@@ -48,11 +49,41 @@ describe("deployment cancellation", () => {
     const id = "dep_remote_cancel";
     const signal = registerDeploymentExecution(id);
     ids.push({ id, signal });
+    const cancelBuild = vi.fn(async () => {});
+    const finish = bindDeploymentBuildCancellation(signal, cancelBuild);
     mocks.findById.mockResolvedValue({ status: "cancelled" });
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(signal.aborted).toBe(true);
+    await finish();
+    expect(cancelBuild).toHaveBeenCalledOnce();
+  });
+
+  it("forwards an earlier cancellation once when the build runtime finishes resolving", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const cancel = vi.fn(async () => {});
+    const finish = bindDeploymentBuildCancellation(controller.signal, cancel);
+    await finish();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels only its own build and detaches the runtime when work finishes", async () => {
+    const first = new AbortController();
+    const second = new AbortController();
+    const cancelFirst = vi.fn(async () => {});
+    const cancelSecond = vi.fn(async () => {});
+    const finishFirst = bindDeploymentBuildCancellation(first.signal, cancelFirst);
+    const finishSecond = bindDeploymentBuildCancellation(second.signal, cancelSecond);
+    first.abort();
+    await finishFirst();
+    expect(cancelFirst).toHaveBeenCalledOnce();
+    expect(cancelSecond).not.toHaveBeenCalled();
+    await finishSecond();
+    second.abort();
+    await Promise.resolve();
+    expect(cancelSecond).not.toHaveBeenCalled();
   });
 
   it("wakes a prompt-like promise when cancellation is requested", async () => {

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBillingPlanGrantRepo, createDatabase, schema, type DatabaseConnection } from "@repo/db/factory";
-import { PRICING, planLimits, resolvePlan } from "@repo/core";
+import { PRICING } from "@repo/core";
+import { savedOffer, savedLimits } from "../../../test/helpers/saved-cloud-offer";
 import type { OblienBillingApi, OblienSubscription } from "@repo/platform/engine/lib/oblien-billing-api";
 import { runPlanGrantCommand, type PlanGrantCommand } from "@repo/platform/engine/modules/billing/billing-plan-grant.operator";
 import { planGrantPeriod, readProviderBilling, reconcilePlanGrant } from "@repo/platform/engine/modules/billing/billing-plan-grants";
@@ -54,6 +55,12 @@ const reconcile = async (date = now) => reconcilePlanGrant({
   organizationId, namespace, grants, billing, syncLimits, now: date, state: await readProviderBilling(billing, namespace),
 });
 
+async function seedSavedGrant(expiresAt: Date | null = null) {
+  return grants.create({ id: "bpg-saved", organizationId, namespace, planTierId: "pro",
+    offer: savedOffer("pro"), limits: savedLimits("pro"), grantedBy: command.operator,
+    reason: command.reason, createdAt: now, expiresAt });
+}
+
 beforeAll(async () => {
   connection = await createDatabase({ driver: "pglite", dataDir: "memory://" });
   grants = createBillingPlanGrantRepo(connection.db);
@@ -73,27 +80,37 @@ beforeEach(async () => {
 });
 
 describe("complimentary plan operator and reconciliation", () => {
-  it("previews the actual owned workspace without creating a grant or credit writes", async () => {
-    expect(await run({ dryRun: true, email: "CUSTOMER@example.com" })).toMatchObject({
-      organizationId, namespace, action: "grant", charge: 0, monthlyCredits: 3500, expiresAt: null,
-    });
+  it.each([false, true])("cannot fund a new monthly server by granting credits (dry run: %s)", async dryRun => {
+    await expect(run({ dryRun })).rejects.toMatchObject({ code: "BILLING_CAPACITY_FUNDING_REQUIRED" });
     expect(await grants.current(organizationId)).toBeNull();
     expect(provider.setPolicy).not.toHaveBeenCalled();
     expect(provider.resetQuota).not.toHaveBeenCalled();
   });
 
-  it("issues Pro with its saved allowance and caps, while the provider subscription stays null", async () => {
+  it("previews a saved grant without changing its terms or writing credits", async () => {
+    const saved = await seedSavedGrant();
+    expect(await run({ dryRun: true, email: "CUSTOMER@example.com" })).toMatchObject({
+      organizationId, namespace, action: "reuse", charge: 0, monthlyCredits: 3500, expiresAt: null,
+    });
+    expect(await grants.current(organizationId)).toEqual(saved);
+    expect(provider.setPolicy).not.toHaveBeenCalled();
+    expect(provider.resetQuota).not.toHaveBeenCalled();
+  });
+
+  it("applies a saved Pro allowance and caps without creating a subscription", async () => {
+    await seedSavedGrant();
     expect(await run()).toMatchObject({ plan: "pro", charge: 0, monthlyCredits: 3500, spendingBlocked: false, nextRenewal: "2026-10-25T14:00:00.000Z", expiresAt: null });
     const row = (await grants.current(organizationId))!;
-    expect(row).toMatchObject({ grantedBy: "test-operator", reason: "Partner account", limits: planLimits("pro") });
+    expect(row).toMatchObject({ grantedBy: "test-operator", reason: "Partner account", limits: savedLimits("pro") });
     expect(row.appliedPeriodEnd?.toISOString()).toBe("2026-10-25T14:00:00.000Z");
     expect((await grants.ownedOrganizations(command.email))[0]?.tier).toBe("pro");
-    expect(syncLimits).toHaveBeenCalledWith(namespace, "pro", resolvePlan("pro").oblienLimits);
+    expect(syncLimits).toHaveBeenCalledWith(namespace, "pro", savedOffer("pro").resourceLimits);
     expect(subscription).toBeNull();
     expect(lockKeys).toHaveBeenCalledWith(`billing:entitlement:${organizationId}`);
   });
 
   it("reuses a grant without resetting consumption or adding credits", async () => {
+    await seedSavedGrant();
     const first = await run();
     used = 42.5;
     const second = await run();
@@ -104,6 +121,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("retries a crash after provider reset without refilling credits consumed since the crash", async () => {
+    await seedSavedGrant();
     const write = vi.spyOn(grants, "markApplied").mockRejectedValueOnce(new Error("database unavailable"));
     await expect(run()).rejects.toThrow("database unavailable");
     expect((await grants.current(organizationId))?.appliedPeriodEnd).toBeNull();
@@ -116,6 +134,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("renews the saved monthly allowance once even after catalog prices/allowances change", async () => {
+    await seedSavedGrant();
     await run();
     used = 2990;
     const catalog = PRICING.plans.find(plan => plan.id === "pro")!;
@@ -134,6 +153,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("revokes the budget and caps, retains history, and safely repeats revocation", async () => {
+    await seedSavedGrant();
     await run();
     used = 35;
     expect(await run({ command: "revoke" })).toMatchObject({ plan: "free", grantId: null, spendingBlocked: true });
@@ -148,6 +168,7 @@ describe("complimentary plan operator and reconciliation", () => {
 
   it("stops an expiring grant instead of granting another cycle", async () => {
     const expiry = new Date("2026-10-01T00:00:00Z");
+    await seedSavedGrant(expiry);
     await run({ expiresAt: expiry });
     expect(provider.resetQuota).toHaveBeenCalledWith(namespace, expiry.toISOString());
     expect((await reconcile(expiry)).grant).toBeNull();
@@ -156,6 +177,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("keeps failed revocation pending so reconciliation can finish the provider cleanup", async () => {
+    await seedSavedGrant();
     await run();
     provider.setPolicy.mockRejectedValueOnce(new Error("provider unavailable"));
     await expect(run({ command: "revoke" })).rejects.toThrow("provider unavailable");
@@ -166,6 +188,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("does not mark a grant applied when the provider did not confirm its allowance", async () => {
+    await seedSavedGrant();
     provider.setPolicy.mockResolvedValueOnce({ success: true, namespace, service: "workspace_vm", ...policy });
     await expect(run()).rejects.toMatchObject({ code: "BILLING_PLAN_GRANT_UNCONFIRMED" });
     expect((await grants.current(organizationId))?.appliedPeriodEnd).toBeNull();
@@ -194,6 +217,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("permanently retires a grant when a hosted subscription takes over without touching its budget", async () => {
+    await seedSavedGrant();
     await run();
     subscription = { tierId: "pro", status: "active", billingInterval: "monthly", periodStart: now.toISOString(), periodEnd: "2026-10-25T14:00:00Z", cancelAtPeriodEnd: false, canceledAt: null };
     expect((await reconcile()).grant).toBeNull();
@@ -213,6 +237,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("does not accept a different plan or silently extend a fixed-duration grant on retry", async () => {
+    await seedSavedGrant();
     await run();
     await expect(run({ plan: "team" })).rejects.toMatchObject({ code: "BILLING_GRANT_CONFLICT" });
     await expect(run({ expiresAt: new Date("2026-11-01T00:00:00Z") })).rejects.toMatchObject({ code: "BILLING_GRANT_CONFLICT" });
@@ -220,6 +245,7 @@ describe("complimentary plan operator and reconciliation", () => {
   });
 
   it("has a database constraint against simultaneous unreleased grants", async () => {
+    await seedSavedGrant();
     await run();
     const row = (await grants.current(organizationId))!;
     await expect(grants.create({ ...row, id: "duplicate-grant" })).rejects.toThrow();

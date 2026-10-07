@@ -11,6 +11,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { OS_DIR } from "./paths";
 import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
@@ -94,6 +95,26 @@ export function readConfig(): CliConfig {
   }
 }
 
+const commandContext = new AsyncLocalStorage<CliConfig>();
+
+/** Pin endpoints, credentials and capabilities together for an entire invocation.
+ * Config mutations still read the latest file; they take effect on the next command.
+ * Login may explicitly enter a fresh scope after saving its validated connection.
+ */
+export function withCommandContext<T>(action: () => T): T {
+  const config = readConfig();
+  for (const context of Object.values(config.contexts)) {
+    if (context.caps) Object.freeze(context.caps);
+    Object.freeze(context);
+  }
+  Object.freeze(config.contexts);
+  return commandContext.run(Object.freeze(config), action);
+}
+
+function connectionConfig(): CliConfig {
+  return commandContext.getStore() ?? readConfig();
+}
+
 export function writeConfig(config: CliConfig): void {
   mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
@@ -106,7 +127,7 @@ export function writeConfig(config: CliConfig): void {
 
 /** Name of the active context. */
 export function getActiveContext(): string {
-  return readConfig().current;
+  return connectionConfig().current;
 }
 
 /** Switch the active context. Throws if it doesn't exist. */
@@ -121,7 +142,7 @@ export function setActiveContext(name: string): void {
 
 /** Resolve a context by name (defaults to active). Returns {} if absent. */
 export function getContext(name?: string): CliContext {
-  const config = readConfig();
+  const config = connectionConfig();
   return config.contexts[name ?? config.current] ?? {};
 }
 
@@ -138,12 +159,17 @@ export function addContext(
     ...(opts.dashboardUrl !== undefined ? { dashboardUrl: opts.dashboardUrl } : {}),
     ...(opts.token !== undefined ? { token: opts.token } : {}),
   };
+  if (opts.apiUrl !== undefined && opts.apiUrl !== prev.apiUrl) delete config.contexts[name].caps;
   writeConfig(config);
 }
 
 /** Shallow-merge a patch into a context (defaults to active). Used by caps. */
-export function updateContext(name: string, patch: Partial<CliContext>): void {
+export function updateContext(name: string, patch: Partial<CliContext>, expectedApiUrl?: string): void {
   const config = readConfig();
+  // A late discovery response must not cache one server's caps on a retargeted
+  // context, or recreate a context removed while the request was in flight.
+  if (expectedApiUrl !== undefined && (!config.contexts[name] ||
+    (config.contexts[name].apiUrl ?? LOCAL_API_URL) !== expectedApiUrl)) return;
   config.contexts[name] = { ...(config.contexts[name] ?? {}), ...patch };
   writeConfig(config);
 }

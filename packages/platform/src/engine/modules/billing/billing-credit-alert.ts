@@ -7,10 +7,13 @@ export function creditAlertNotification(input: {
   timestamp: unknown;
   data: Record<string, unknown>;
   organizationId: string;
+  workspaceId?: string;
   entitlement: OblienEntitlement;
   dashboardUrl: string;
 }) {
   const { eventType, eventId, data, entitlement, organizationId } = input;
+  // Late credit events cannot turn a paid capacity contract into a credit alert.
+  if (entitlement.tierId === "capacity") return null;
   if (data.service !== undefined && data.service !== "workspace_vm") return null;
   const alert = entitlement.quota.alert;
   if (!alert || !["low", "grace", "depleted"].includes(alert.state)) return null;
@@ -40,6 +43,7 @@ export function creditAlertNotification(input: {
 
   const url = new URL("/cloud-billing", input.dashboardUrl);
   url.searchParams.set("organizationId", organizationId);
+  if (input.workspaceId) url.searchParams.set("workspaceId", input.workspaceId);
   const message =
     alert.state === "depleted"
       ? "Your Cloud credits are exhausted. New workloads are blocked. Open billing to buy more credits or review your plan."

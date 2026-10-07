@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { billingUsageWindow, formatBillingNumber, formatMilliCredits, usageTimestamp, weeklyCreditUsage } from "./billing-usage";
+import { billingUsageWindow, formatBillingNumber, formatMilliCredits, usageTimestamp, weeklyUsage } from "./billing-usage";
 
 describe("Cloud usage units and dates", () => {
+  it("sums recorded CPU hours weekly without substituting credits or inventing missing CPU measurements", () => {
+    const weekly = weeklyUsage([
+      { timestamp: "2026-10-05", credits: 99, vcpu_hours: 0.25 },
+      { timestamp: "2026-10-06", credits: 50, vcpu_hours: 1.5 },
+      { timestamp: "2026-10-12", credits: 5, vcpu_hours: 1 },
+      { timestamp: "2026-10-13", credits: 8 },
+    ]);
+    expect(weekly[0]).toMatchObject({ credits: 149, vcpu_hours: 1.75 });
+    expect(weekly[1]!.vcpu_hours).toBeUndefined();
+  });
   it("formats balances and provider usage in the same customer unit without shrinking usage 1000x", () => {
     expect(formatMilliCredits(125_500, "en")).toBe("125.5");
     expect(formatBillingNumber(125.5, "en")).toBe("125.5");
@@ -22,7 +32,7 @@ describe("Cloud usage units and dates", () => {
   });
   it("uses UTC for provider timestamps and keeps Sunday and Monday in separate weeks", () => {
     expect(usageTimestamp("2026-09-13 23:30:00").toISOString()).toBe("2026-09-13T23:30:00.000Z");
-    expect(weeklyCreditUsage([
+    expect(weeklyUsage([
       { timestamp: "2026-09-14 00:00:00", credits: 120.25 },
       { timestamp: "2026-09-13 23:30:00", credits: 10 },
       { timestamp: "2026-09-15T00:00:00Z", credits: 30.5 },

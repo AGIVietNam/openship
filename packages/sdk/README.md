@@ -98,7 +98,7 @@ An explicit organization requires SDK protocol 1 and `fixedOrganizationScope` su
 
 `baseUrl` accepts `/api` and reverse-proxy prefixes. `token` may be a function for rotation; `fetch` may be injected. `ApiError` retains `status`, `code`, and response `body`. Mutations are submitted once without automatic retries or redirects. Cancelling a wait stops that wait; use `deployments.cancel(id)` to cancel execution.
 
-Connect directly to the canonical cloud instance and its cloud organization ID. Owner-account links on self-hosted instances do not yet provide a verified tenant mapping, so fixed scopes refuse that forwarding with `CLOUD_SCOPE_UNAVAILABLE`. Existing unscoped HTTP forwarding is preserved.
+Connect directly to the canonical Cloud instance and its Cloud organization ID to manage Cloud-stored records. Local owner-account links do not authorize that access for fixed requests or organization-bound/scoped credentials; they return `CLOUD_SCOPE_UNAVAILABLE` even if `organizationId` is omitted. Desktop and self-hosted projects can instead execute on a connected managed server using its local `serverId` and `buildStrategy: "server"`, with project and server permissions checked locally. That flow keeps project records on the local instance and uses the verified server binding.
 
 ## Supported shared surface
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "./api/client";
 import type { BillingState } from "./api/billing";
 import { cloudDeployRecovery, cloudDeployRestriction, cloudCapacityRestriction, cloudDeployFailure } from "./cloud-deploy-pricing";
+import { monthlyCompute } from "../../test/helpers/monthly-billing";
 
 describe("Cloud deployment recovery", () => {
   it.each(["CLOUD_BILLING_BLOCKED", "PLAN_UPGRADE_REQUIRED"])("restores persisted %s failures for app and project deployments", (errorCode) => {
@@ -73,6 +74,15 @@ describe("Cloud deployment recovery", () => {
     expect(cloudDeployRecovery(state({ status: "past_due", overQuota: true }), blocked)).toBe("payment");
     expect(cloudDeployRecovery(state({ status: "credit_exhausted", overQuota: false }), blocked)).toBe("paused");
     expect(cloudDeployRecovery(state({ tier: "free", status: "credit_exhausted", overQuota: false }), blocked)).toBe("paused");
+  });
+  it.each(["active", "past_due", "canceled"])("uses confirmed monthly coverage despite a %s renewal record and old quota", status => {
+    const covered = state({ status, overQuota: true, compute: monthlyCompute() });
+    expect(cloudDeployRecovery(covered, blocked)).toBe("ready");
+    expect(cloudDeployRecovery(covered, { code: "PLAN_UPGRADE_REQUIRED", reason: "free-subdomain-limit" })).toBe("upgrade");
+  });
+  it("keeps monthly suspension and expired coverage separate from compute-credit top-ups", () => {
+    expect(cloudDeployRecovery(state({ status: "credit_exhausted", overQuota: true, compute: monthlyCompute() }), blocked)).toBe("paused");
+    expect(cloudDeployRecovery(state({ compute: monthlyCompute({ covered: false, status: "expired" }) }), blocked)).toBe("payment");
   });
   it("never presents top-ups as the solution to an exhausted build or service limit", () => {
     expect(cloudDeployRecovery(state({ overQuota: true }), { code: "PLAN_UPGRADE_REQUIRED", reason: "build-minutes-exhausted" })).toBe("upgrade");

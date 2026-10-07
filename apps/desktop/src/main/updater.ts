@@ -41,6 +41,7 @@ import { dirname, join, resolve } from "node:path";
 import { advisoryManifestUrl, parseManifest, type AdvisoryManifest } from "@repo/core";
 import { isAllowedUpdateAssetUrl } from "./security";
 import { verifyUpdateSignature } from "./update-signature";
+import { fetchUpdateAsset } from "./update-download";
 
 export type UpdateAsset = DesktopUpdateAsset;
 export type UpdateInfo = Extract<DesktopUpdateCheck, { available: true }>;
@@ -174,6 +175,7 @@ export async function downloadUpdate(
 async function downloadVerifiedInstaller(asset: UpdateAsset, version: string, onProgress: (fraction: number) => void, dest: string): Promise<void> {
   const res = await fetchUpdateAsset(asset.url, AbortSignal.timeout(10 * 60_000));
   if (!res.ok || !res.body) {
+    await res.body?.cancel();
     throw new Error(`Download failed: HTTP ${res.status}`);
   }
 
@@ -210,7 +212,10 @@ async function downloadVerifiedInstaller(asset: UpdateAsset, version: string, on
   let sidecarError = "unreachable";
   try {
     const shaRes = await fetchUpdateAsset(`${asset.url}.sha256`, AbortSignal.timeout(10_000));
-    if (!shaRes.ok) sidecarError = `HTTP ${shaRes.status}`;
+    if (!shaRes.ok) {
+      sidecarError = `HTTP ${shaRes.status}`;
+      await shaRes.body?.cancel();
+    }
     else {
       const tok = (await readUpdateProof(shaRes)).trim().split(/\s+/)[0]?.toLowerCase();
       if (tok && /^[0-9a-f]{64}$/.test(tok)) expected = tok;
@@ -233,27 +238,15 @@ async function downloadVerifiedInstaller(asset: UpdateAsset, version: string, on
   }
   try {
     const signature = await fetchUpdateAsset(`${asset.url}.sig`, AbortSignal.timeout(10_000));
-    if (!signature.ok) throw new Error("No publisher signature");
+    if (!signature.ok) {
+      await signature.body?.cancel();
+      throw new Error("No publisher signature");
+    }
     verifyUpdateSignature(JSON.parse(await readUpdateProof(signature)), { version, name: asset.name, sha256: digest });
   } catch {
     rmSync(dest, { force: true });
     throw new Error("Update signature is missing or invalid. Refusing to install this update.");
   }
-}
-
-/** Validate each redirect before issuing the next request, including sidecars. */
-async function fetchUpdateAsset(input: string, signal: AbortSignal): Promise<Response> {
-  let url = input;
-  for (let redirects = 0; redirects <= 5; redirects++) {
-    if (!isAllowedUpdateAssetUrl(url)) throw new Error("Untrusted update download destination.");
-    const response = await net.fetch(url, { redirect: "manual", signal, headers: { "User-Agent": "Openship-Desktop" } });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    await response.body?.cancel();
-    const next = response.headers.get("location");
-    if (!next) throw new Error("Update redirect has no destination.");
-    url = new URL(next, url).href;
-  }
-  throw new Error("Too many update redirects.");
 }
 
 async function readUpdateProof(response: Response): Promise<string> {

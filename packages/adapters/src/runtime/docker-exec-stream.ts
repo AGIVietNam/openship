@@ -31,6 +31,8 @@ import { Duplex } from "node:stream";
 
 /** The connection details dockerode's modem already resolved for us. */
 export interface DaemonConnection {
+  /** A transport-owned duplex, when Docker is reached through a stream adapter. */
+  openStream?: () => Promise<Duplex>;
   socketPath?: string;
   host?: string;
   port?: number | string;
@@ -72,6 +74,8 @@ function connect(conn: DaemonConnection): Duplex {
  */
 function bridgeSocket(socket: Duplex, leftover: Buffer): Duplex {
   const out = new Duplex({
+    // Docker ending its response still closes stdin, after queued writes drain.
+    allowHalfOpen: false,
     read() {
       socket.resume();
     },
@@ -79,8 +83,10 @@ function bridgeSocket(socket: Duplex, leftover: Buffer): Duplex {
       socket.write(chunk as Buffer, (err) => cb(err ?? null));
     },
     final(cb) {
-      if (!socket.destroyed) socket.end();
-      cb();
+      if (socket.destroyed) return cb();
+      // A transport can still be draining acknowledged writes after end().
+      // Do not let this wrapper auto-destroy it before its own final callback.
+      socket.end(cb);
     },
     destroy(err, cb) {
       socket.destroy(err ?? undefined);
@@ -137,7 +143,7 @@ function upgradeRequest(
   opts: UpgradeRequestOptions = {},
 ): Promise<Duplex> {
   return new Promise<Duplex>((resolve, reject) => {
-    const socket = connect(conn);
+    let socket: Duplex | undefined;
     let settled = false;
     let head: Buffer = Buffer.alloc(0);
     const protocol = opts.protocol ?? "tcp";
@@ -147,7 +153,7 @@ function upgradeRequest(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      socket.destroy();
+      socket?.destroy();
       reject(err);
     };
 
@@ -180,39 +186,45 @@ function upgradeRequest(
 
       settled = true;
       clearTimeout(timer);
-      socket.removeListener("data", onData);
-      socket.removeListener("error", fail);
-      socket.removeListener("close", onEarlyClose);
+      socket!.removeListener("data", onData);
+      socket!.removeListener("error", fail);
+      socket!.removeListener("close", onEarlyClose);
 
       // Bytes that arrived in the same packet as the header are already shell
       // output; the bridge hands them to the caller instead of dropping them.
       const headBytes = Buffer.byteLength(text.slice(0, end + HEADER_END.length), "latin1");
-      resolve(bridgeSocket(socket, head.subarray(headBytes)));
+      resolve(bridgeSocket(socket!, head.subarray(headBytes)));
     };
 
     const onEarlyClose = () => fail(new Error(`docker ${path}: connection closed before upgrade`));
 
-    socket.on("data", onData);
-    socket.on("error", fail);
-    socket.on("close", onEarlyClose);
+    // Keep acquisition inside the handshake deadline. A connection arriving
+    // after timeout belongs to this attempt and must be closed immediately.
+    void Promise.resolve().then(() => conn.openStream ? conn.openStream() : connect(conn)).then((connected) => {
+      if (settled) { connected.destroy(); return; }
+      socket = connected;
+      socket.on("data", onData);
+      socket.on("error", fail);
+      socket.on("close", onEarlyClose);
 
-    // Unversioned path: the daemon accepts it and we don't have to track which
-    // API version the modem negotiated.
-    const extraHeaders = Object.entries(opts.headers ?? {})
-      .map(([name, value]) => `${name}: ${value}\r\n`)
-      .join("");
-    const contentType = opts.contentType ? `Content-Type: ${opts.contentType}\r\n` : "";
-    socket.write(
-      `POST ${path} HTTP/1.1\r\n` +
-        `Host: ${conn.socketPath ? "localhost" : (conn.host ?? "localhost")}\r\n` +
-        contentType +
-        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
-        `Connection: Upgrade\r\n` +
-        `Upgrade: ${protocol}\r\n` +
-        extraHeaders +
-        `\r\n` +
-        body,
-    );
+      // Unversioned path: the daemon accepts it and we don't have to track which
+      // API version the modem negotiated.
+      const extraHeaders = Object.entries(opts.headers ?? {})
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join("");
+      const contentType = opts.contentType ? `Content-Type: ${opts.contentType}\r\n` : "";
+      socket.write(
+        `POST ${path} HTTP/1.1\r\n` +
+          `Host: ${conn.socketPath ? "localhost" : (conn.host ?? "localhost")}\r\n` +
+          contentType +
+          `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+          `Connection: Upgrade\r\n` +
+          `Upgrade: ${protocol}\r\n` +
+          extraHeaders +
+          `\r\n` +
+          body,
+      );
+    }).catch(fail);
   });
 }
 
@@ -298,6 +310,16 @@ type DockerodeDialOptions = {
 type DockerodeDialCallback = (error: Error | null, result: unknown) => void;
 
 const patchedBuildKitModems = new WeakSet<object>();
+const rawStreams = new WeakMap<object, NonNullable<DaemonConnection["openStream"]>>();
+
+/** Bind upgraded connections to the same scoped transport as this Docker client. */
+export function setDockerodeRawStreamFactory(
+  docker: { modem?: unknown },
+  openStream: NonNullable<DaemonConnection["openStream"]>,
+): void {
+  if (!docker.modem || typeof docker.modem !== "object") throw new Error("Docker modem is unavailable");
+  rawStreams.set(docker.modem, openStream);
+}
 
 function headerValue(headers: unknown, name: string): string {
   if (!headers || typeof headers !== "object") return "";
@@ -356,6 +378,9 @@ export function installDockerodeBuildKitSessionWorkaround(docker: { modem?: unkn
 export function daemonConnectionFrom(docker: { modem?: unknown }): DaemonConnection {
   const m = (docker.modem ?? {}) as Record<string, unknown>;
   return {
+    ...(docker.modem && typeof docker.modem === "object" && rawStreams.has(docker.modem)
+      ? { openStream: rawStreams.get(docker.modem) }
+      : {}),
     socketPath: typeof m.socketPath === "string" ? m.socketPath : undefined,
     host: typeof m.host === "string" ? m.host : undefined,
     port: typeof m.port === "number" || typeof m.port === "string" ? m.port : undefined,

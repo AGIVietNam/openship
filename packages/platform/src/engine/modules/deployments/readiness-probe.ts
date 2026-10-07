@@ -107,16 +107,15 @@ export async function probeDeployedReadiness(args: {
       skipped:
         `${result.unverifiable}. ` +
         (result.via === "exec"
-          ? "Check the deployment host's SSH forwarding permissions and `curl` installation, then redeploy."
-          : "Check the deployment host's SSH connection, then redeploy to have this checked."),
+          ? "Check the deployment host's control connection and `curl` installation, then redeploy."
+          : "Check the deployment host's connection, then redeploy to have this checked."),
     };
   }
 
-  // Name the fallback so operators know the probe ran on the deployment host even
-  // though its SSH policy disallows forwarding.
+  // Name the execution point for transports that probe on the host.
   const viaNote =
     result.via === "exec"
-      ? " (probed with `curl` on the host — this channel refuses port forwarding)"
+      ? " (probed with `curl` on the deployment host)"
       : "";
 
   if (!result.ready) {

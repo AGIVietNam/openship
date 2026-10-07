@@ -10,6 +10,7 @@ export const DeploymentContainerInfoSchema = Type.Object({
   containerId: Type.String(), status: Type.Union((["queued", "building", "deploying", "running", "stopped", "failed", "cancelled", "missing"] as const).map(value => Type.Literal(value))),
   ip: Type.Optional(Type.String()), hostPort: Type.Optional(Type.Number()), hostPortByContainerPort: Type.Optional(Type.Record(Type.String(), Type.Number())),
   uptimeSeconds: Type.Optional(Type.Number()), usage: Type.Optional(RuntimeUsageSchema),
+  resources: Type.Optional(Type.Object({ cpuCores: Type.Number(), memoryMb: Type.Number() }, { additionalProperties: false })),
 }, { additionalProperties: false });
 export const DeploymentControlSchemas = {
   containerInfo: { action: "read", output: DeploymentContainerInfoSchema },

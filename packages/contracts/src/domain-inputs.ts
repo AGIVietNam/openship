@@ -67,7 +67,7 @@ export const PreviewDomainBody = Type.Object({
     Type.String({
       minLength: 1,
       maxLength: 128,
-      description: "Selected self-hosted deployment target whose public host should populate A records.",
+      description: "Selected deployment server whose routing configuration determines the DNS records.",
     }),
   ),
   includeWww: Type.Optional(

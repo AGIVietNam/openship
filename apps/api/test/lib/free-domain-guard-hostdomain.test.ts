@@ -59,7 +59,7 @@ describe("assertFreeEndpointsAllowed — self-hosted HOST_DOMAIN (#427)", () => 
     await assertFreeEndpointsAllowed(
       "org-1",
       [{ domainType: "custom", customDomain: "legacy.opsh.io" }] as any,
-      "managed-compose-domains",
+      { capability: "managed-compose-domains" },
     );
     expect(requireCloud).toHaveBeenCalledTimes(1);
     expect(requireCloud).toHaveBeenCalledWith("managed-compose-domains", { organizationId: "org-1" });

@@ -40,6 +40,10 @@ const h = vi.hoisted(() => ({
   progressResponseGate: null as Promise<void> | null,
   releaseProgressResponse: null as (() => void) | null,
   progressWriteStarted: null as (() => void) | null,
+  pgDump: false,
+  pgExit: null as Promise<{ code: number | null; stderr: string }> | null,
+  recent: [] as Array<{ id: string; artifacts: unknown[] }>,
+  historyReads: [] as unknown[][],
 }));
 
 vi.mock("@repo/db", () => ({
@@ -58,6 +62,10 @@ vi.mock("@repo/db", () => ({
       }),
       claimExecution: async () => { h.row.status = "preparing"; return "claimed"; },
       acknowledgeExecutionFinished: async () => {},
+      recentSucceededForSource: async (...args: unknown[]) => {
+        h.historyReads.push(args);
+        return h.recent;
+      },
       transition: async (_id: string, status: string, patch?: Record<string, unknown>) => {
         if (["succeeded", "failed", "cancelled", "server_error"].includes(String(h.row.status))) {
           return false;
@@ -143,6 +151,8 @@ vi.mock("@repo/adapters", async () => {
   const { HashingPassthrough } = await import("../../../../../packages/adapters/src/backup/common/sha256-stream");
   const { PRESERVED_ARTIFACT_METADATA_KEYS } = await import("../../../../../packages/adapters/src/backup/common/artifact-metadata");
   const { sanitizeProducerOpts } = await import("../../../../../packages/adapters/src/backup/common/producer-opts");
+  const { PgDumpProducer } =
+    await import("../../../../../packages/adapters/src/backup/producers/pg-dump");
   return {
     HashingPassthrough,
     PRESERVED_ARTIFACT_METADATA_KEYS,
@@ -174,20 +184,31 @@ vi.mock("@repo/adapters", async () => {
         return { deleted: keys, failed: [] };
       },
     }),
-    resolveExecutor: () => ({ readContainerEnv: async () => ({}) }),
-    resolveProducerForService: () => ({
-      kind: "volume",
-      async *produce() {
-        for (const a of h.artifacts) {
-          yield {
-            name: a.name,
-            stream: Readable.from(a.chunks.map((n) => Buffer.alloc(n))),
-            payloadKind: "volume",
-            metadata: {},
-          };
-        }
-      },
+    resolveExecutor: () => ({
+      readContainerEnv: async () => ({}),
+      execStream: async () => ({
+        stdout: Readable.from(
+          h.artifacts.flatMap((artifact) => artifact.chunks.map((size) => Buffer.alloc(size))),
+        ),
+        awaitExit: h.pgExit ?? Promise.resolve({ code: 0, stderr: "" }),
+      }),
     }),
+    resolveProducerForService: () =>
+      h.pgDump
+        ? PgDumpProducer
+        : {
+            kind: "volume",
+            async *produce() {
+              for (const a of h.artifacts) {
+                yield {
+                  name: a.name,
+                  stream: Readable.from(a.chunks.map((n) => Buffer.alloc(n))),
+                  payloadKind: "volume",
+                  metadata: {},
+                };
+              }
+            },
+          },
     resolveProducer: () => ({ kind: "volume", async *produce() {} }),
   };
 });
@@ -239,6 +260,68 @@ beforeEach(() => {
   h.progressResponseGate = null;
   h.releaseProgressResponse = null;
   h.progressWriteStarted = null;
+  h.pgDump = false;
+  h.pgExit = null;
+  h.recent = [];
+  h.historyReads = [];
+});
+
+describe("PostgreSQL capture completion", () => {
+  it("waits for pg_dump exit even after every output byte was uploaded", async () => {
+    h.pgDump = true;
+    h.artifacts = [{ name: "pg-dump.dump", chunks: [8192] }];
+    let finish!: (exit: { code: number; stderr: string }) => void;
+    h.pgExit = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const run = new BackupOrchestrator().execute("bkr_live");
+    try {
+      await vi.waitFor(() => expect(h.row.artifacts).toHaveLength(1));
+      expect(h.row.status).toBe("uploading");
+      expect(h.puts.some((key) => key.endsWith("manifest.json"))).toBe(false);
+      expect(h.notifications).toEqual([]);
+    } finally {
+      finish({ code: 0, stderr: "" });
+      await run;
+    }
+    expect(h.row.status).toBe("succeeded");
+    expect(h.historyReads).toEqual([["pol_1", "dst_1", "svc_1", null]]);
+  });
+
+  it.each([1, null])("rejects nonempty output when the dump exit is %s", async (code) => {
+    h.pgDump = true;
+    h.artifacts = [{ name: "pg-dump.dump", chunks: [8192] }];
+    h.pgExit = Promise.resolve({ code, stderr: "dump interrupted" });
+    await new BackupOrchestrator().execute("bkr_live");
+    expect(h.row).toMatchObject({ status: "failed", bytesTransferred: 0 });
+    expect(h.row.errorMessage).toContain(`pg_dump exited ${code}`);
+    expect(h.puts.some((key) => key.endsWith("manifest.json"))).toBe(false);
+    expect(h.deleted).toContain("openship/openship/postgres/bkr_live/pg-dump.dump");
+    expect(h.notifications).toEqual(["backup_run.failed"]);
+    expect(h.historyReads).toEqual([]);
+  });
+
+  it("does not publish or retain a severely truncated dump even with exit zero", async () => {
+    h.pgDump = true;
+    h.artifacts = [{ name: "pg-dump.dump", chunks: [8_119_408] }];
+    h.recent = [1_260_000_000, 1_250_000_000, 1_270_000_000].map((sizeBytes, index) => ({
+      id: `bkr_previous_${index}`,
+      artifacts: [
+        {
+          name: "pg-dump.dump",
+          payloadKind: "pg_dump",
+          sizeBytes,
+          metadata: { postgresDb: "postgres", format: "custom", compression: "none" },
+        },
+      ],
+    }));
+    await new BackupOrchestrator().execute("bkr_live");
+    expect(h.row).toMatchObject({ status: "failed", bytesTransferred: 0 });
+    expect(h.row.errorMessage).toContain("below 1%");
+    expect(h.puts.some((key) => key.endsWith("manifest.json"))).toBe(false);
+    expect(h.deleted).toContain("openship/openship/postgres/bkr_live/pg-dump.dump");
+    expect(h.notifications).toEqual(["backup_run.failed"]);
+  });
 });
 
 describe("live upload progress", () => {

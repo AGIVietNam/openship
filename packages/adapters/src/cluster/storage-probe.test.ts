@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +53,8 @@ describe("shared-file verification policy", () => {
       const corrupt = spawnSync(...command(jobs[1]!));
       rmSync(join(directory, "roundtrip"));
       const missing = spawnSync(...command(jobs[1]!));
+      mkdirSync(join(directory, "roundtrip"));
+      const unwritable = spawnSync(...command(jobs[0]!));
       for (const job of jobs) {
         expect(job.spec.backoffLimit).toBeGreaterThan(0);
         expect(job.spec.backoffLimit).toBeLessThanOrEqual(2);
@@ -66,11 +68,13 @@ describe("shared-file verification policy", () => {
               ? match.values.includes(code)
               : !match.values.includes(code);
           });
-        // A killed or never-started container is counted against the finite
-        // replacement budget, not ignored and not a false file mismatch.
+        // Longhorn remounts can stop the shell during startup with exit 2,
+        // not just 137/143. Only the checker's explicit file-error exit is a
+        // verified mismatch; interrupted processes consume the finite budget.
+        expect(exitRule(2)).toBeUndefined();
         expect(exitRule(137)).toBeUndefined();
         expect(exitRule(143)).toBeUndefined();
-        for (const result of [corrupt, missing]) {
+        for (const result of [corrupt, missing, unwritable]) {
           expect(result.error).toBeUndefined();
           expect(result.status).not.toBe(0);
           // Kubernetes uses the first matching rule. A real checker error

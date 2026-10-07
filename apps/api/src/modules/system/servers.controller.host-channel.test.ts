@@ -17,6 +17,7 @@ vi.mock("@repo/db", () => {
     createdAt: new Date("2026-09-24T00:00:00Z"),
   });
   return { repos: {
+    settings: { findOrgOwnerCloudLink: vi.fn(async () => null) },
     server: {
       listByOrganization: vi.fn(async () => [row()]),
       getInOrganization: vi.fn(async () => row()),
@@ -37,7 +38,7 @@ vi.mock("@repo/platform/engine/lib/geo-ip", async (original) => ({
   ...(await original<Record<string, unknown>>()), primeGeo: vi.fn(async () => {}),
 }));
 vi.mock("@repo/platform/engine/lib/authorization", () => ({
-  authorization: { authorize: h.authorize },
+  authorization: { authorize: h.authorize, checkPermissionOnResource: vi.fn(async () => true) },
 }));
 vi.mock("../../lib/operation-context", () => ({
   operationContext: () => ({ userId: "u1", organizationId: "org1", role: "owner" }),

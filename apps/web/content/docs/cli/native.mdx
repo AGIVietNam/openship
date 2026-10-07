@@ -72,8 +72,10 @@ configuration is rejected.
 | `project`, `app`, `service`, `domain` | Named SDK resource operations. |
 | `deploy`, `deployment`, `logs`, `init` | Deployment workflows and project linking. |
 | `server`, `backup` | Available operations subject to host/provider policy. |
+| `job`, `monitoring` | Shared job and health operations; continuous monitoring remains subject to native job policy and instance authority. |
+| `access`, `token`, `credential`, `dns`, `notification`, `webhook`, `audit` | Shared resource operations with the native identity's permissions. |
 | `system`, `status`, `doctor` | Supported SDK information/settings operations; remaining host/setup actions have command-specific limits. |
-| `edge`, `mail`, `api`, `token`, login/context, and installation commands | Not accepted by the native command gate; use their normal connection or local-installation mode. |
+| `edge`, `mail`, `api`, login/context, and installation commands | Not accepted by the native command gate; use their normal connection or local-installation mode. |
 
 The configuration must be `.mjs`, `.cjs`, or `.js` and export `{ options, scope }`, or a factory returning
 that object. `scope` can be a scope object or an async function. Attached `PlatformKernel` instances

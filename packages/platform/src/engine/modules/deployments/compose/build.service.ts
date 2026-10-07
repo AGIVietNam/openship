@@ -433,7 +433,6 @@ export async function buildComposeImages(opts: {
   composeInterpolationEnv: Record<string, string>;
   buildEnvVars: Record<string, string>;
   buildResources: ResourceConfig;
-  serviceBuildResources?: Record<string, ResourceConfig>;
   gitToken?: string;
   /** Relay helper path on the build host — desktop clone-on-server credential. */
   gitCredentialHelperPath?: string;
@@ -722,7 +721,7 @@ export async function buildComposeImages(opts: {
         (data, streamId) => dnsDiagnostics?.observe(data, streamId),
       );
 
-      if (opts.runtime.name === "cloud" && !opts.project.localPath) {
+      if (opts.project.workspaceId != null && !opts.project.localPath) {
         opts.logger.log(
           `Resolving Dockerfile for compose service "${service.name}" from the build source checkout.\n`,
           "info",
@@ -738,10 +737,9 @@ export async function buildComposeImages(opts: {
       //     keeps the sub-app's stack/installCommand/buildCommand/startCommand/
       //     outputDirectory so the runtime synthesizes a Dockerfile from them.
       const buildSlug = `${sanitizeComposeImageName(opts.project.slug ?? opts.project.name)}-${sanitizeComposeImageName(service.name)}`;
-      const resources = opts.serviceBuildResources?.[service.name] ?? opts.buildResources;
-      if (opts.serviceBuildResources && !Object.hasOwn(opts.serviceBuildResources, service.name)) {
-        throw new Error("The service build configuration changed after capacity was checked. Retry deployment to check its new allocation.");
-      }
+      // Docker builds these services sequentially on one host. Reuse the
+      // resolved host budget, including measured headroom on managed servers.
+      const resources = opts.buildResources;
       const buildConfig = isMonorepo
         ? createMonorepoSourceBuildConfig({
             project: opts.project,
@@ -772,7 +770,7 @@ export async function buildComposeImages(opts: {
                 ? {
                     isStatic: true,
                     hasServer: false,
-                    ...(opts.runtime.name === "cloud"
+                    ...(opts.project.workspaceId != null
                       ? {}
                       : {
                           staticExtractOnly: true,

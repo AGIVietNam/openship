@@ -1,86 +1,80 @@
+import { StringDecoder } from "node:string_decoder";
 import type { LogEntry } from "@repo/adapters";
 
-/**
- * Collapse raw log entries into their final terminal-rendered state.
- *
- * During live streaming, xterm handles \r (carriage return) to overwrite lines
- * in-place (e.g., git progress "Counting objects:  42%\r...100%").
- * When persisting to DB we don't want all intermediate lines - just the final
- * rendered result, as a terminal would show.
- *
- * Step events (entries with `step` field) pass through unchanged - they're
- * structured metadata for the stepper UI, not terminal output.
- */
+/** Save complete terminal lines. Raw executor chunks can end inside a line,
+ * CRLF or UTF-8 character; plain logger entries are already discrete lines. */
 export function collapseTerminalLogs(entries: LogEntry[]): LogEntry[] {
   const result: LogEntry[] = [];
-  // Virtual line buffer - simulates one terminal line
-  let currentLine = "";
-  let currentLevel: LogEntry["level"] = "info";
-  let currentTimestamp = "";
-  let currentServiceName: string | undefined;
-  let currentServiceId: string | undefined;
+  type StreamState = {
+    line: string;
+    carriageReturn: boolean;
+    decoder: StringDecoder;
+    entry: LogEntry;
+  };
+  // Parallel Compose builds share this log list, but not their terminal buffers.
+  const streams = new Map<string, StreamState>();
+  const key = (entry: LogEntry) => entry.serviceId ? `id:${entry.serviceId}`
+    : entry.serviceName ? `name:${entry.serviceName}` : "project";
 
-  const flushLine = () => {
-    const trimmed = currentLine.trimEnd();
-    if (trimmed) {
-      result.push({
-        timestamp: currentTimestamp,
-        message: trimmed,
-        level: currentLevel,
-        serviceName: currentServiceName,
-        // Keep serviceId so the persisted snapshot still routes each line to its
-        // per-service tab on a finished/refreshed deploy (stable id, not name).
-        serviceId: currentServiceId,
-        // No seq: the persisted (finished) path never re-opens the SSE stream, so
-        // there is no resume/dedup cursor to satisfy, and build-status falls back
-        // to the array index. Copying entry.seq here would duplicate it across
-        // lines a single multi-newline entry collapses into.
-      });
+  const flushLine = (state: StreamState) => {
+    const message = state.line.trimEnd();
+    if (message) result.push({
+      timestamp: state.entry.timestamp, message, level: state.entry.level,
+      serviceName: state.entry.serviceName, serviceId: state.entry.serviceId,
+    });
+    state.line = "";
+    state.carriageReturn = false;
+  };
+  const write = (state: StreamState, text: string) => {
+    for (const char of text) {
+      if (state.carriageReturn) {
+        state.carriageReturn = false;
+        if (char === "\n") {
+          flushLine(state);
+          continue;
+        }
+        state.line = "";
+      }
+      if (char === "\r") state.carriageReturn = true;
+      else if (char === "\n") flushLine(state);
+      else state.line += char;
     }
-    currentLine = "";
+  };
+  const finish = (state: StreamState) => {
+    write(state, state.decoder.end());
+    flushLine(state);
+    state.decoder = new StringDecoder("utf8");
   };
 
   for (const entry of entries) {
-    // Step events pass through as-is
     if (entry.step) {
-      flushLine();
+      // A phase boundary ends its stream; service-local steps do not split
+      // another service's in-flight output.
+      if (entry.serviceId || entry.serviceName) {
+        const state = streams.get(key(entry));
+        if (state) finish(state);
+      } else {
+        for (const state of streams.values()) finish(state);
+      }
       result.push(entry);
       continue;
     }
-
-    const text = entry.message;
-    currentLevel = entry.level;
-    currentTimestamp = entry.timestamp;
-    currentServiceName = entry.serviceName;
-    currentServiceId = entry.serviceId;
-
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === "\r") {
-        // Check for \r\n (treat as plain newline)
-        if (i + 1 < text.length && text[i + 1] === "\n") {
-          flushLine();
-          i++; // skip the \n
-        } else {
-          // Bare \r - overwrite: reset current line (don't flush)
-          currentLine = "";
-        }
-      } else if (ch === "\n") {
-        flushLine();
-      } else {
-        currentLine += ch;
-      }
+    let state = streams.get(key(entry));
+    if (!state) {
+      state = { line: "", carriageReturn: false, decoder: new StringDecoder("utf8"), entry };
+      streams.set(key(entry), state);
     }
-
-    // Each LogEntry is a DISCRETE line from its source — docker build steps and
-    // streamExec output arrive WITHOUT a trailing newline, and the live stream
-    // renders each as `message + "\n"`. Flush at the entry boundary so the
-    // persisted view matches the live one; otherwise consecutive newline-less
-    // entries (an entire per-service docker build) concatenate into one
-    // unreadable line. A bare \r within an entry has already reset currentLine
-    // above, so progress bars still collapse to their final value.
-    flushLine();
+    if (entry.rawData !== undefined) {
+      state.entry = entry;
+      write(state, state.decoder.write(Buffer.from(entry.rawData, "base64")));
+    } else {
+      // A structured message following a stream must start on its own line.
+      finish(state);
+      state.entry = entry;
+      write(state, entry.message);
+      flushLine(state);
+    }
   }
-
+  for (const state of streams.values()) finish(state);
   return result;
 }

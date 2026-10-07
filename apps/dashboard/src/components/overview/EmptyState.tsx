@@ -6,9 +6,11 @@ import React from 'react';
 import Link from 'next/link';
 import { useI18n } from '@/components/i18n-provider';
 import { ProjectIllustration } from '@/components/overview/ProjectIllustration';
+import { usePlatform } from '@/context/PlatformContext';
 
 const EmptyState: React.FC = () => {
   const { t } = useI18n();
+  const { selfHosted } = usePlatform();
   const emptyState = t.dashboard.pages.projects.emptyState;
 
   return (
@@ -30,13 +32,15 @@ const EmptyState: React.FC = () => {
           <UiIcon name="plus" className="size-4" />
           {emptyState.createProject}
         </Link>
-        <Link
-          href="/library"
-          className="inline-flex items-center gap-2 px-6 py-3 bg-muted/50 text-foreground text-sm font-medium rounded-xl hover:bg-muted transition-colors"
-        >
-          <UiIcon name="git-branch" className="size-4" />
-          {emptyState.browseTemplates}
-        </Link>
+        {selfHosted && (
+          <Link
+            href="/library"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-muted/50 text-foreground text-sm font-medium rounded-xl hover:bg-muted transition-colors"
+          >
+            <UiIcon name="git-branch" className="size-4" />
+            {emptyState.browseTemplates}
+          </Link>
+        )}
       </div>
 
       {/* Feature highlights - Clean minimal cards */}

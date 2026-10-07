@@ -1,3 +1,4 @@
+import { assertCloudProxyScope } from "../../lib/cloud/scope";
 import { repos } from "@repo/db";
 import { AppError, safeErrorMessage } from "@repo/core";
 import { OperationError, ProjectLogSchemas, type ServerLogsInput } from "@repo/contracts";
@@ -20,8 +21,7 @@ const luaDeployedServers = new Set<string>();
 async function assertTrafficAccess(ctx: ExecutionContext, sources: ProjectTrafficSource[]) {
   for (const source of sources) {
     if (source.kind === "cloud") {
-      if (!env.CLOUD_MODE && ctx.scopeMode === "fixed")
-        throw new AppError("This cloud link has no tenant mapping. Connect directly with the cloud organizationId.", 409, "CLOUD_SCOPE_UNAVAILABLE");
+      if (!env.CLOUD_MODE) assertCloudProxyScope(ctx);
       continue;
     }
     // A deployment snapshot must not redirect project log access to another tenant's server.

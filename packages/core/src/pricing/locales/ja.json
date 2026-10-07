@@ -22,7 +22,7 @@
     },
     "hobby": {
       "name": "Hobby",
-      "tagline": "軽い開発や時々使うアプリ向け。利用クレジットには上限があります。"
+      "tagline": "個人プロジェクトや日常的なアプリ向けの小さなマネージドサーバー。"
     }
   },
   "features": {
@@ -31,7 +31,7 @@
     "anyWorkload": "何でも動かせる — コンテナ、Compose、ワーカー、Postgres、Redis",
     "runningServices": "同時に稼働するアプリ・データベース・ワーカー {runningServices} 個",
     "buildMinutes": "毎月 {buildMinutes} 分のビルド時間",
-    "meteredBuilds": "ビルドは共通クレジットを使用し、月ごとの時間上限はありません",
+    "sharedBuilds": "ビルドはサーバーを共有し、月ごとの時間上限はありません",
     "power": "アプリ 1 つあたり最大 {powerCpu} vCPU と {powerRamGb} GB RAM",
     "projects": "プロジェクト {maxProjects} 個",
     "projectsUnlimited": "プロジェクトは無制限",
@@ -55,10 +55,8 @@
     "selfHostedServices": "マネージドサービスはすべて利用可能 — Postgres、Redis、メール",
     "selfHostedClients": "CLI、Web、デスクトップ — バックエンドは一つ",
     "selfHostedFreeSubdomains": "Openship Cloud に接続すると、無料の {freeDomainSuffix} サブドメインが {freeSubdomains} 個",
-    "usageCredits": "月あたり{credits}利用クレジット",
-    "namespaceCapacity": "合計: {namespaceCpu} vCPU、RAM {namespaceRamGb} GB、ディスク {namespaceDiskGb} GB",
-    "finiteUsage": "常時稼働にはクレジットの追加購入が必要な場合があります。",
-    "oneRunningService": "アプリ、データベース、ワーカーのいずれか1つを実行"
+    "monthlyCoverage": "支払い済みの月はCPU・RAM・ストレージを利用可能",
+    "namespaceCapacity": "合計: {namespaceCpu} vCPU、RAM {namespaceRamGb} GB、ディスク {namespaceDiskGb} GB"
   },
   "selfHosted": {
     "name": "セルフホスト",

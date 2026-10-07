@@ -1,5 +1,5 @@
 import { getMcpTools } from "./mcp-tools";
-import { env } from "@repo/platform/engine/config/index";
+import { env, cloudRuntimeTarget } from "@repo/platform/engine/config/index";
 
 /**
  * MCP `prompts` — the guided-flow catalog. Tools tell an agent WHAT it can do
@@ -46,7 +46,14 @@ export function workspaceInstructions(workspace?: { organizationId: string | nul
     "Match the user's requested workspace to that list. If several workspaces are available and the destination is unspecified or ambiguous, ask which one to use before creating resources. Never substitute the default when the requested workspace is unavailable.",
     "Pass the chosen organizationId as a TOP-LEVEL argument alongside body/query on every tool call in the flow (scan, create/ensure, install, service changes, deploy and status). It is fixed scope for that call; no active-workspace switch is persisted. For an authenticated out-of-band upload, also send X-Organization-Id and X-Openship-Scope: fixed.",
     "If boundOrganizationId is set, this credential only accesses that workspace. To use another, the user must authorize a connection or create a token in that workspace; passing a different ID cannot widen access.",
-    "organizationId selects the request's workspace; it does not move an existing app. Existing project transfer endpoints handle Cloud/self-hosted moves. Cross-workspace app transfer is not currently exposed through MCP.",
+    "organizationId selects the request's workspace; serverId selects where the app runs. Neither moves existing project records between Openship instances.",
+    ...(env.CLOUD_MODE ? [
+      "This is Openship Cloud. Local filesystem paths are not accessible here; use uploaded source or a git repository. Managed servers build on the server (buildStrategy:'server').",
+    ] : [
+      `To run a desktop/self-hosted project on Cloud, call ${toolRef("GET", "/api/system/servers/destinations")} and select an accessible managed server. Pass its local serverId when creating/importing the project, then deploy that project with buildStrategy:'server'. The project and source stay controlled by this instance; no transfer_to_cloud is needed. The credential must have project creation/write and destination server write permissions.`,
+      `If the server is not connected here, an authorized administrator can select it from ${toolRef("GET", "/api/system/servers/managed/available")} and use ${toolRef("POST", "/api/system/servers/managed/connect")}. Use the returned LOCAL serverId, not the remote Cloud ID.`,
+      `A Cloud account link does not grant this credential access to projects stored in Cloud. For those projects, authorize a separate MCP connection to ${cloudRuntimeTarget.api}/api/mcp and select its Cloud organizationId. CLOUD_SCOPE_UNAVAILABLE cannot be bypassed by omitting organizationId or by sending the Cloud ID to this local connection.`,
+    ]),
   ].join("\n");
 }
 
@@ -78,7 +85,7 @@ const PROMPTS: PromptDef[] = [
         "",
         "Guided flows (fetch these prompts for step-by-step chains):",
         "- `deploy-from-git` — deploy a GitHub/linked repo.",
-        "- `deploy-a-folder` — deploy a local source folder (has an out-of-band upload step).",
+        "- `deploy-a-folder` — deploy a controller-local source folder, or upload from another machine using an authenticated HTTP client.",
         "- `install-catalog-app` — install a one-click app.",
         "- `cluster-and-scale` — private networking → server cluster → optional shared files → application deployment → scale → recovery/cleanup (self-hosted).",
         "- `cluster-database` — provision, connect, back up and recover a managed database (self-hosted).",
@@ -111,7 +118,7 @@ const PROMPTS: PromptDef[] = [
         `1. Confirm GitHub is connected and find the repo: call ${ref("GET", "/api/github/home")} (returns connection state, accounts, and repos). If you need branches, ${ref("GET", "/api/github/repos/:owner/:repo/branches")}. To learn the build config, use ${ref("GET", "/api/github/repos/:owner/:repo/detect")} — it works on a deploy-only grant and returns the detected framework/commands directly, so you do NOT need to read files to configure a deploy.`,
         `2. Detect the stack/build config before committing: ${ref("POST", "/api/deployments/prepare")} with the repo/branch. Use what it returns (framework, install/build/start commands, port) in the next step.`,
         `3. Create the project from the git source: ${ref("POST", "/api/projects")}. Bake in the detected build config. (If the project already exists, skip to step 4; you can link a repo to an existing project with ${ref("POST", "/api/projects/:id/git/link")}.)`,
-        `4. Deploy: ${ref("POST", "/api/deployments/build/access")} with the projectId from step 3. Optional wizard settings: envVars, publicEndpoints (omit to auto-derive a free subdomain), buildStrategy, runtimeMode, cloudResourceTier. Do NOT set deployTarget:'cloud' on a self-hosted instance. To redeploy an already-linked project later, ${ref("POST", "/api/deployments")} is the shortcut.`,
+        `4. Deploy: ${ref("POST", "/api/deployments/build/access")} with the projectId from step 3. The project's selected serverId determines the destination; deployTarget alone does not select a managed server. Managed servers use buildStrategy:'server'. Optional wizard settings: envVars, publicEndpoints (omit to auto-derive a free subdomain), runtimeMode, cloudResourceTier. To redeploy an already-linked project later, ${ref("POST", "/api/deployments")} is the shortcut.`,
         `5. Watch it: poll ${ref("GET", "/api/deployments/:id")} for status/urls and ${ref("GET", "/api/deployments/:id/logs")} for build/runtime logs.`,
         `6. A deploy can STOP AND ASK — it is not always running or finished. If it seems stuck, or ends up \`action_required\`, call ${ref("GET", "/api/deployments/:id/pending")}. A held deploy is waiting on a decision (e.g. the port is already in use) and will ABORT on its own at the item's \`expiresAt\`; answer it with ${ref("POST", "/api/deployments/:id/build/respond")} using an action id from that item's \`resolveWith\` — never an id you guessed. Other items there resolve the same way, each carrying the exact call to make. ${ref("GET", "/api/projects/:id/pending-actions")} is the whole-project version (also covers domains, certificates and routing) — worth a look before reporting a deploy as simply failed.`,
       ].join("\n");
@@ -119,18 +126,27 @@ const PROMPTS: PromptDef[] = [
   },
   {
     name: "deploy-a-folder",
-    title: "Deploy a local source folder (upload)",
+    title: "Deploy a local source folder",
     description:
-      "The 4-step folder-upload flow. Note step 1b: the raw tarball upload is NOT an MCP tool — you POST the bytes yourself with an HTTP client.",
+      "Use a controller-local path on desktop, or the authenticated upload flow for a folder on another machine. Source location and build location are separate choices.",
     build: (_args, ref) =>
       [
-        "Deploy a local folder that isn't in git. This flow has an out-of-band byte upload — raw binary can't cross JSON-RPC, so you upload the tarball yourself.",
+        ...(env.CLOUD_MODE ? [] : [
+          "DESKTOP / SAME MACHINE — when the folder is readable by this Openship controller, no byte upload or bearer-token extraction is needed:",
+          `1. Choose an accessible destination with ${ref("GET", "/api/system/servers/destinations")} if deploying to a server or Cloud.`,
+          `2. For a new project, call ${ref("POST", "/api/projects/import")} with name, localPath and the selected serverId. It detects the source and returns the created project. For an existing local project, use its projectId instead of creating a duplicate.`,
+          `3. Call ${ref("POST", "/api/deployments/build/access")} with that projectId and buildStrategy:'server' for a managed server. Openship reads the local source and transfers it to the selected server for the build. 'local' describes the source, not the build strategy. Do not transfer the project to Cloud.`,
+          `4. Poll ${ref("GET", "/api/deployments/:id")} and ${ref("GET", "/api/deployments/:id/logs")}.`,
+          "",
+        ]),
+        "UPLOAD — for a folder on a different machine, raw binary cannot cross JSON-RPC. Use an authenticated HTTP uploader (SDK, CLI or browser). OAuth bearer tokens stay in the MCP client; do not ask the assistant to extract them. If no authenticated uploader is available, use the desktop connection on the folder's machine or a git source.",
         "",
-        `1. Open an upload session: ${ref("POST", "/api/projects/folder/session")}. It returns \`upload\` = { url, absoluteUrl, method, headers, requiresAuth } and a sessionId.`,
+        `Before opening a session, choose or create a project with ${ref("POST", "/api/projects")} (name, gitProvider:'upload', serverId). A credential limited to its own projects must create the project first, then pass that projectId through session and ensure; an unbound session requires wildcard project write access.`,
+        `1. Open an upload session: ${ref("POST", "/api/projects/folder/session")} with projectId. It returns \`upload\` = { url, absoluteUrl, method, headers, requiresAuth } and a sessionId.`,
         "1b. OUT OF BAND — gzip your folder into a tarball and POST the bytes to `upload.absoluteUrl` (the ready-to-use URL; `upload.url` is the same target relative to your API base) with the returned headers and Content-Type: application/gzip, plus your `Authorization: Bearer <token>` when `upload.requiresAuth` is true. Use a plain HTTP client; there is no MCP tool for this.",
         `2. Detect the uploaded source's stack: ${ref("POST", "/api/projects/folder/scan/:sessionId")} (body may be {}). Returns framework, package manager, install/build/start commands, output dir, port — plus a \`services\` array for a docker-compose folder.`,
-        `3. Create/update the project that carries the build config: ${ref("POST", "/api/projects/ensure")}. Map the scan fields in (framework = the scan's stack id) and set gitProvider:'upload'. If the scan returned \`services\`, pass that array through verbatim AND include \`uploadSessionId\` — env values come back masked ("••••••••"), and the session is what restores the real ones. Returns the project id.`,
-        `4. Deploy: ${ref("POST", "/api/deployments/build/access")} with the projectId (step 3) and uploadSessionId (step 1). Then watch with ${ref("GET", "/api/deployments/:id")} and ${ref("GET", "/api/deployments/:id/logs")}.`,
+        `3. Update that project's build config: ${ref("POST", "/api/projects/ensure")} with its explicit projectId and name. Map the scan fields in (framework = the scan's stack id) and set gitProvider:'upload'. If the scan returned \`services\`, pass that array through verbatim AND include \`uploadSessionId\` — env values come back masked ("••••••••"), and the session is what restores the real ones.`,
+        `4. Deploy: ${ref("POST", "/api/deployments/build/access")} with projectId and uploadSessionId (step 1); use buildStrategy:'server' for a managed server. Then watch with ${ref("GET", "/api/deployments/:id")} and ${ref("GET", "/api/deployments/:id/logs")}.`,
       ].join("\n"),
   },
   {

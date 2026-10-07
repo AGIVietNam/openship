@@ -1,14 +1,14 @@
 /** Trusted operator workflow. No HTTP route, tenant token, or user metadata can call it. */
-import { AppError, generateId, planLimits, type PlanTierId } from "@repo/core";
+import { AppError, type PlanTierId } from "@repo/core";
 import type { BillingPlanGrantRepo } from "@repo/db/factory";
 import type { OblienBillingApi } from "../../lib/oblien-billing-api";
-import { subscriptionOffer } from "./billing-catalog";
 import { cloudBillingLockKey, effectiveCloudPlan, readProviderBilling, reconcilePlanGrant, resolvePlanGrant } from "./billing-plan-grants";
 
 export interface PlanGrantCommand {
   command: "grant" | "show" | "revoke";
   email: string;
   organizationId?: string;
+  workspaceId?: string;
   plan: PlanTierId;
   expiresAt: Date | null;
   operator: string;
@@ -36,47 +36,45 @@ export async function runPlanGrantCommand(args: PlanGrantCommand, deps: {
       ? `Choose an owned workspace with --organization. Available: ${matches.map(row => `${row.organizationId} (${row.name})`).join(", ")}`
       : "No owned workspace was found for this email on this instance", 400, "BILLING_GRANT_WORKSPACE_REQUIRED");
   }
-  if (!target.namespace) throw new AppError("Open this workspace's Cloud billing once to provision its namespace", 409, "CLOUD_NAMESPACE_REQUIRED");
-  const namespace = target.namespace;
+  const workspaces = args.workspaceId || !target.namespace ? await grants.workspaces(target.organizationId) : [];
+  const managed = args.workspaceId ? workspaces.find(row => row.id === args.workspaceId) : workspaces.length === 1 ? workspaces[0] : undefined;
+  if ((args.workspaceId && !managed) || (!target.namespace && !managed)) throw new AppError("Select a Cloud workspace with --workspace", 400, "CLOUD_WORKSPACE_REQUIRED");
+  const namespace = managed ? managed.namespace : target.namespace;
+  if (!namespace) throw new AppError("Open this workspace's Cloud billing once to provision its namespace", 409, "CLOUD_NAMESPACE_REQUIRED");
 
-  return deps.lock(cloudBillingLockKey(target.organizationId), async () => {
+  return deps.lock(cloudBillingLockKey(target.organizationId, managed?.id), async () => {
     const lockedTarget = (await grants.ownedOrganizations(args.email.trim())).find(row =>
       row.userId === target.userId && row.organizationId === target.organizationId);
-    if (lockedTarget?.namespace !== namespace) {
+    const lockedWorkspace = managed ? (await grants.workspaces(target.organizationId)).find(row => row.id === managed.id) : undefined;
+    if (!lockedTarget || (managed ? !lockedWorkspace || lockedWorkspace.namespace !== namespace || lockedWorkspace.deletionInProgress : lockedTarget.namespace !== namespace)) {
       throw new AppError("Workspace ownership or namespace changed; retry the command", 409, "BILLING_GRANT_WORKSPACE_CHANGED");
     }
     const now = deps.now ?? new Date();
     const state = await readProviderBilling(billing, namespace);
-    let row = await grants.current(target.organizationId);
-    const base = { email: target.email, organizationId: target.organizationId, workspace: target.name, namespace };
+    const row = await grants.current(target.organizationId, namespace);
+    const base = { email: target.email, organizationId: target.organizationId, workspace: managed?.name ?? target.name, workspaceId: managed?.id, namespace };
 
     if (args.command === "grant") {
       if (!args.reason.trim() || !args.operator.trim()) throw new AppError("A reason and operator are required", 400, "BILLING_GRANT_REASON_REQUIRED");
       if (args.expiresAt && (!Number.isFinite(args.expiresAt.getTime()) || args.expiresAt <= now)) {
         throw new AppError("--expires must be a future ISO timestamp", 400, "BILLING_GRANT_EXPIRY_INVALID");
       }
-      // Also validates that this tier has a finite monthly allowance in the catalog.
-      const offer = subscriptionOffer(args.plan, "monthly");
-      if (state.subscription || await grants.hasLegacySubscription(target.organizationId)) {
+      if (state.subscription || (!managed && await grants.hasLegacySubscription(target.organizationId))) {
         throw new AppError("This workspace already has a subscription. Complimentary grants do not replace paid billing.", 409, "BILLING_GRANT_SUBSCRIPTION_EXISTS");
       }
-      if (row && (row.planTierId !== args.plan || row.revokedAt || (row.expiresAt?.getTime() ?? null) !== (args.expiresAt?.getTime() ?? null))) {
+      if (!row)
+        throw new AppError("Monthly server capacity requires verified funding at Oblien. A complimentary credit grant cannot purchase a monthly server.", 409, "BILLING_CAPACITY_FUNDING_REQUIRED");
+      const offer = resolvePlanGrant(row, target.organizationId, namespace, now).offer;
+      if (row.planTierId !== args.plan || row.revokedAt || (row.expiresAt?.getTime() ?? null) !== (args.expiresAt?.getTime() ?? null)) {
         throw new AppError("A different grant exists. Revoke it before issuing another plan or duration.", 409, "BILLING_GRANT_CONFLICT");
       }
       if (args.dryRun) return {
-        ...base, dryRun: true, action: row ? "reuse" : "grant", plan: args.plan,
-        charge: 0, monthlyCredits: row ? resolvePlanGrant(row, target.organizationId, namespace, now).offer.credits : offer.credits,
+        ...base, dryRun: true, action: "reuse", plan: args.plan,
+        charge: 0, monthlyCredits: offer.credits,
         expiresAt: args.expiresAt?.toISOString() ?? null,
       };
-      if (!row) {
-        row = await grants.create({
-          id: generateId("bpg"), organizationId: target.organizationId, namespace,
-          planTierId: args.plan, offer, limits: planLimits(args.plan),
-          grantedBy: args.operator.trim(), reason: args.reason.trim(), createdAt: now, expiresAt: args.expiresAt,
-        });
-      }
     } else if (args.command === "show" || args.dryRun) {
-      const latest = row ?? await grants.latest(target.organizationId);
+      const latest = row ?? await grants.latest(target.organizationId, namespace);
       return {
         ...base, dryRun: args.dryRun, action: args.command,
         provider: { tier: state.entitlement.tierId, status: state.entitlement.status, quota: state.entitlement.quota, hasSubscription: Boolean(state.subscription) },

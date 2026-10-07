@@ -1,11 +1,13 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
+import { stdin as input, stderr as output } from "node:process";
 import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
-import { OpenshipClient } from "@repo/sdk/client";
-import { addContext, DEFAULT_CONTEXT, getContext, setActiveContext } from "../lib/config";
+import { OpenshipClient, ApiError } from "@repo/sdk/client";
+import { addContext, DEFAULT_CONTEXT, getContext, setActiveContext, withCommandContext } from "../lib/config";
 import { fetchCaps } from "../lib/caps";
+import { err, info, isJsonMode, ok, printJson } from "../lib/output";
+import { exitCommand } from "../lib/command-exit";
 
 export const loginCommand = new Command("login")
   .description("Authenticate with a Personal Access Token (create one in dashboard Settings)")
@@ -24,8 +26,12 @@ export const loginCommand = new Command("login")
 
     // Interactive: open the PAT settings page and read a pasted token.
     if (!token) {
+      if (isJsonMode() || !input.isTTY) {
+        err("Pass --token <token> for non-interactive login.");
+        exitCommand(1);
+      }
       const settingsUrl = `${dashboardUrl}/settings`;
-      console.log(
+      info(
         chalk.bold("\n  Openship login\n") +
           chalk.dim("  Create a Personal Access Token in Settings → Personal Access Tokens,\n") +
           chalk.dim("  then paste it here.\n"),
@@ -36,7 +42,7 @@ export const loginCommand = new Command("login")
       } catch {
         // Browser open is best-effort; the URL is printed below regardless.
       }
-      console.log(
+      info(
         chalk.dim("  If the browser didn't open, visit:\n") + chalk.cyan(`  ${settingsUrl}\n`),
       );
 
@@ -47,56 +53,46 @@ export const loginCommand = new Command("login")
 
     token = token?.trim();
     if (!token) {
-      console.error(chalk.red("\n  No token provided.\n"));
-      process.exit(1);
+      err("No token provided.");
+      exitCommand(1);
     }
     if (!token.startsWith("opsh_pat_")) {
-      console.error(
+      err(
         chalk.red("\n  That doesn't look like an Openship token (expected opsh_pat_…).\n"),
       );
-      process.exit(1);
+      exitCommand(1);
     }
 
     // Validate the token against an authenticated endpoint before storing.
     // 200 → valid; 403 → valid but lacks settings:read scope (still usable).
-    let valid = false;
     let scoped = false;
     try {
       const client = new OpenshipClient({ baseUrl: apiUrl, token, timeoutMs: 8000 });
-      const res = await client.http.raw("/tokens");
-      if (res.ok) valid = true;
-      else if (res.status === 403) {
-        valid = true;
+      await client.tokens.list();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
         scoped = true;
+      } else {
+        err(error instanceof ApiError && error.status === 401
+          ? "Token rejected by the API. Check that it is valid and not revoked."
+          : `Could not validate the token at ${apiUrl}. Check the API URL and connectivity.`);
+        exitCommand(1);
       }
-      await res.body?.cancel();
-    } catch {
-      console.error(
-        chalk.red(`\n  Couldn't reach the API at ${apiUrl}. `) +
-          chalk.dim("Is it running? Use --api-url for a different host.\n"),
-      );
-      process.exit(1);
-    }
-
-    if (!valid) {
-      console.error(
-        chalk.red("\n  Token rejected by the API. Check that it's valid and not revoked.\n"),
-      );
-      process.exit(1);
     }
 
     addContext(contextName, { apiUrl, dashboardUrl, token });
     setActiveContext(contextName);
 
     // Best-effort capability discovery so later commands can gate offline.
-    await fetchCaps({ force: true }).catch(() => undefined);
+    await withCommandContext(() => fetchCaps({ force: true, context: contextName })).catch(() => undefined);
 
-    console.log(
-      chalk.green(`\n  Logged in`) +
-        chalk.dim(` (context "${contextName}"). Token saved to ~/.openship/config.json\n`),
-    );
+    if (isJsonMode()) {
+      printJson({ authenticated: true, context: contextName, apiUrl, dashboardUrl, scoped });
+      return;
+    }
+    ok(`Logged in (context "${contextName}").`);
     if (scoped) {
-      console.log(
+      info(
         chalk.dim("  (Token lacks settings:read scope — some commands may be limited.)\n"),
       );
     }

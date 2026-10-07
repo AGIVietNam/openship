@@ -60,6 +60,7 @@
   "fix": "修复",
   "install": "安装",
   "update": "更新",
+  "updating": "正在更新…",
   "mailSetup": "邮件设置",
   "selfUpdateNote": "本次安装通过命令行自行更新。",
   "empty": {

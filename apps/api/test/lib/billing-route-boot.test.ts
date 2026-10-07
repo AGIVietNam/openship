@@ -13,9 +13,14 @@ it.each([
   const app = new Hono().route("/api/billing", billingPlansRoutes).route("/api/billing", routes);
   expect(
     app.routes.some(
-      (route) => route.method === "POST" && route.path === "/api/billing/capacity/preview",
+      (route) => route.method === "GET" && route.path === "/api/billing/subscription/quote",
     ),
   ).toBe(true);
+  for (const [method, path] of [["POST", "/subscription/change/preview"], ["POST", "/subscription/change"],
+    ["GET", "/subscription/change"], ["POST", "/subscription/change/cancel"],
+    ["GET", "/checkouts"], ["POST", "/checkout/resume"], ["POST", "/checkout/cancel"]]) {
+    expect(app.routes.some(route => route.method === method && route.path === `/api/billing${path}`)).toBe(true);
+  }
 
   // Exercise the production scanner, not a duplicate rule or mocked route spec.
   const result = scanRoutes(app);

@@ -86,7 +86,7 @@ export function IssuesView() {
   // static "issue" row with no sign the work is already underway.
   useReattachActiveFix({ install: selfHosted }, presentRecoveredOperation);
 
-  const [issues, setIssues] = useState<SystemIssue[]>([]);
+  const [feedIssues, setIssues] = useState<SystemIssue[]>([]);
   const [counts, setCounts] = useState<IssueCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [feedError, setFeedError] = useState<string | null>(null);
@@ -104,14 +104,6 @@ export function IssuesView() {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-
-  // Container health is a self-hosted capability: the watcher reads Docker
-  // daemons owned by this installation. Cloud workloads are observed by the
-  // cloud platform, not by this local health endpoint, so do not expose a tab
-  // that can only answer with the route's intentional local-only 404.
-  useEffect(() => {
-    if (!selfHosted && tab === "health") setTab("open");
-  }, [selfHosted, tab]);
 
   const load = useCallback(
     (opts: { silent?: boolean; fresh?: boolean } = {}): Promise<void> => {
@@ -161,7 +153,7 @@ export function IssuesView() {
   );
 
   const reloadAfterChange = useCallback(() => load({ silent: true, fresh: true }), [load]);
-  const { busyId, resolve, infraFix } = useIssueActions(reloadAfterChange, presentOperation);
+  const { busyIds, resolve, infraFix, issues } = useIssueActions(reloadAfterChange, presentOperation, feedIssues);
   const monitoringScan = useMonitoringScan({
     enabled: selfHosted,
     online,
@@ -449,7 +441,7 @@ export function IssuesView() {
             ) : (
               <IssueList
                 issues={filtered}
-                busyId={busyId}
+                busyIds={busyIds}
                 onResolve={resolve}
                 onInfraFix={infraFix}
                 onRecheck={monitoringScan.canRescan ? monitoringScan.recheckHealth : undefined}

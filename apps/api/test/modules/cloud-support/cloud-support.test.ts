@@ -7,6 +7,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { sql } from "drizzle-orm";
 import { AppError, SUPPORT_EMAIL } from "@repo/core";
 import type { Database } from "@repo/db";
+import type { ExecutionContext } from "@repo/platform";
+import type { Context, Next } from "hono";
+import {
+  CLOUD_SUPPORT_ACCOUNT_HEADER,
+  CloudSupportCustomerDetailSchema,
+  parseInput,
+} from "@repo/contracts";
 import { createCloudSupportRepo } from "../../../../../packages/db/src/repos/cloud-support.repo";
 import { CloudSupportService } from "@repo/platform/engine/modules/cloud-support/service";
 
@@ -16,6 +23,7 @@ const state = vi.hoisted(() => ({
   limiter: vi.fn(),
   routeLimiter: vi.fn(),
   wake: vi.fn(),
+  customer: null as ExecutionContext | null,
 }));
 vi.mock("@repo/platform/engine/config/env", () => ({ env: state.env }));
 vi.mock("@repo/platform/engine/config/index", () => ({ env: state.env }));
@@ -30,7 +38,13 @@ vi.mock("../../../src/lib/rate-limit", () => ({ rateLimit: state.limiter }));
 // Auth for the operator routes stays real. Only unrelated identity/permission
 // registration and the router's ordinary IP limiter are isolated here.
 vi.mock("@repo/platform/engine/lib/auth", () => ({ auth: { api: { getSession: vi.fn() } } }));
-vi.mock("../../../src/middleware/auth", () => ({ authMiddleware: vi.fn() }));
+vi.mock("../../../src/middleware/auth", () => ({
+  authMiddleware: async (c: Context, next: Next) => {
+    if (!state.customer) return c.json({ error: "Unauthorized" }, 401);
+    c.set("ctx", state.customer);
+    await next();
+  },
+}));
 vi.mock("../../../src/middleware/rate-limiter", () => ({
   rateLimiterFor: () => async (_c: unknown, next: () => Promise<void>) => {
     state.routeLimiter();
@@ -70,6 +84,15 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await client.exec(
+    readFileSync(
+      new URL(
+        "../../../../../packages/db/drizzle/0167_cloud_support_customers.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
   db = drizzle(client);
   repo = createCloudSupportRepo(db as unknown as Database);
   state.service = new CloudSupportService({ enabled: () => state.env.CLOUD_MODE, repo, send });
@@ -87,6 +110,7 @@ beforeAll(async () => {
 }, 30_000);
 beforeEach(async () => {
   state.env.CLOUD_MODE = true;
+  state.customer = null;
   await client.exec("TRUNCATE cloud_support_ticket CASCADE");
   send.mockReset().mockResolvedValue(true);
   state.limiter.mockReset().mockResolvedValue({ allowed: true, resetMs: 1000, remaining: 4 });
@@ -321,5 +345,247 @@ describe("Cloud support tickets", () => {
     expect(await state.service!.flush()).toEqual({ delivered: 0, failed: 0 });
     expect(send).not.toHaveBeenCalled();
     expect(await repo.list({ limit: 25 })).toHaveLength(0);
+  });
+});
+
+const customerContext = (userId = "customer-one"): ExecutionContext => ({
+  userId,
+  user: { id: userId, name: "Signed-in customer", email: `${userId}@example.com` },
+  organizationId: "shared-organization",
+  role: "member",
+  membershipId: "member",
+  sessionId: "session",
+  sessionKind: "cookie",
+  clientIp: null,
+  userAgent: null,
+  traceId: "support-test",
+});
+const customerInput = (extra = {}) => ({
+  requestId: randomUUID(),
+  subject: "Build stopped before publishing",
+  message: "Deployment dep-example failed.",
+  category: "deployment",
+  ...extra,
+});
+const createCustomerTicket = async (extra = {}) => {
+  const response = await call("/mine", "POST", customerInput(extra));
+  expect(response.status).toBe(201);
+  return response.json() as Promise<{ id: string; createdAt: string }>;
+};
+
+describe("private Cloud customer support", () => {
+  beforeEach(() => {
+    state.customer = customerContext();
+  });
+
+  it("derives identity from the session and does not claim anonymous tickets by email", async () => {
+    await call("", "POST", input({ email: state.customer!.user.email }));
+    const ticket = await createCustomerTicket();
+    expect(await repo.find(ticket.id)).toMatchObject({
+      ownerUserId: "customer-one",
+      name: "Signed-in customer",
+      email: "customer-one@example.com",
+    });
+    const result = await (await call("/mine")).json();
+    expect(result.tickets.map((row: { id: string }) => row.id)).toEqual([ticket.id]);
+    expect(JSON.stringify(result)).not.toMatch(/inputHash|ownerUserId|customer-one@example/);
+    expect((await call("/tickets")).status).toBe(401);
+  });
+
+  it.each(["email", "name", "ownerUserId", "organizationId", "status", "source"])(
+    "rejects client-supplied %s",
+    async (field) => {
+      expect((await call("/mine", "POST", customerInput({ [field]: "spoofed" }))).status).toBe(400);
+      expect(await repo.list({ limit: 25 })).toEqual([]);
+    },
+  );
+
+  it("isolates reads, replies, status changes and pagination from another user in the same organization", async () => {
+    const ticket = await createCustomerTicket();
+    state.customer = customerContext("customer-two");
+    expect(await (await call("/mine")).json()).toEqual({ tickets: [], nextCursor: null });
+    for (const [method, path, body] of [
+      ["GET", `/mine/${ticket.id}`],
+      ["GET", `/mine?before=${ticket.id}`],
+      ["POST", `/mine/${ticket.id}/replies`, { requestId: randomUUID(), message: "Foreign reply" }],
+      ["PATCH", `/mine/${ticket.id}`, { status: "resolved" }],
+    ] as const)
+      expect((await call(path, method, body)).status).toBe(404);
+    expect((await repo.find(ticket.id))!.status).toBe("open");
+    expect(await repo.messages(ticket.id)).toHaveLength(2);
+  });
+
+  it("preserves one ticket and one outbox on retries even if the account's profile changes", async () => {
+    const body = customerInput();
+    const first = await (await call("/mine", "POST", body)).json();
+    state.customer = {
+      ...state.customer!,
+      user: { ...state.customer!.user, name: "Updated name", email: "new@example.com" },
+    };
+    state.limiter.mockResolvedValue({ allowed: false, resetMs: 1000 });
+    expect(await (await call("/mine", "POST", body)).json()).toEqual(first);
+    expect(state.limiter).toHaveBeenCalledOnce();
+    expect(await repo.messages(first.id)).toHaveLength(2);
+    expect((await call("/mine", "POST", { ...body, message: "Changed" })).status).toBe(409);
+    expect((await call("/mine", "POST", customerInput())).status).toBe(429);
+  });
+
+  it("shares operator replies with the customer and reopens the original conversation for new details", async () => {
+    const ticket = await createCustomerTicket();
+    await state.service!.flush();
+    await state.service!.reply(ticket.id, {
+      requestId: randomUUID(),
+      message: "Please include the build output.",
+      resolve: true,
+    });
+    // A saved reply is available in-app even while SMTP is unavailable.
+    send.mockResolvedValue(false);
+    await state.service!.flush();
+    const detail = parseInput(
+      CloudSupportCustomerDetailSchema,
+      await (await call(`/mine/${ticket.id}`)).json(),
+    );
+    expect(detail.ticket.status).toBe("resolved");
+    expect(detail.messages).toEqual([
+      expect.objectContaining({ author: "support", body: "Please include the build output." }),
+    ]);
+    expect(JSON.stringify(detail)).not.toMatch(
+      /SMTP|leaseId|deliveredAt|lastError|attempts|notification|receipt/,
+    );
+    const reply = {
+      requestId: randomUUID(),
+      message: "Here are the missing details.\nBuild exited with code 1.",
+    };
+    const response = await call(`/mine/${ticket.id}/replies`, "POST", reply);
+    expect(response.status).toBe(201);
+    expect(parseInput(CloudSupportCustomerDetailSchema, await response.json())).toMatchObject({
+      ticket: { status: "open" },
+      messages: [
+        expect.anything(),
+        {
+          author: "customer",
+          body: reply.message,
+          id: expect.any(String),
+          createdAt: expect.any(String),
+        },
+      ],
+    });
+    send.mockClear().mockResolvedValue(true);
+    await state.service!.flush();
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]![0]).toMatchObject({
+      to: SUPPORT_EMAIL,
+      replyTo: "customer-one@example.com",
+    });
+    expect(send.mock.calls[0]![0].text).toContain(reply.message);
+    await call(`/mine/${ticket.id}`, "PATCH", { status: "resolved" });
+    state.limiter.mockClear();
+    await call(`/mine/${ticket.id}/replies`, "POST", reply);
+    expect((await repo.find(ticket.id))!.status).toBe("resolved");
+    expect(state.limiter).not.toHaveBeenCalled();
+    expect(
+      (await repo.messages(ticket.id)).filter((row) => row.kind === "customer_reply"),
+    ).toHaveLength(1);
+  });
+
+  it("deduplicates concurrent replies and rejects a changed body under the same reference", async () => {
+    const ticket = await createCustomerTicket();
+    const reply = { requestId: randomUUID(), message: "One update" };
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        state.service!.replyForCustomer(state.customer!, ticket.id, reply, async () => {}),
+      ),
+    );
+    expect(
+      (await repo.messages(ticket.id)).filter((row) => row.kind === "customer_reply"),
+    ).toHaveLength(1);
+    expect(
+      (await call(`/mine/${ticket.id}/replies`, "POST", { ...reply, message: "Different update" }))
+        .status,
+    ).toBe(409);
+    expect(
+      (await call(`/mine/${ticket.id}/replies`, "POST", { ...reply, message: "   " })).status,
+    ).toBe(400);
+    expect((await call(`/mine/${ticket.id}`, "PATCH", { status: "invented" })).status).toBe(400);
+  });
+
+  it("filters and paginates only owned tickets, including literal search characters", async () => {
+    const first = await createCustomerTicket({ subject: "Billing 100% correct" });
+    await createCustomerTicket({ subject: "Billing renewal" });
+    await createCustomerTicket({ subject: "Another deployment" });
+    await call(`/mine/${first.id}`, "PATCH", { status: "resolved" });
+    const page = await (await call("/mine?status=open&limit=1")).json();
+    expect(page.tickets).toHaveLength(1);
+    expect(page.nextCursor).toBeTruthy();
+    const second = await (await call(`/mine?status=open&limit=1&before=${page.nextCursor}`)).json();
+    expect(second.tickets).toHaveLength(1);
+    expect(second.tickets[0].id).not.toBe(page.tickets[0].id);
+    expect(second.nextCursor).toBeNull();
+    expect(
+      (await (await call("/mine?search=%25")).json()).tickets.map((row: { id: string }) => row.id),
+    ).toEqual([first.id]);
+    expect((await (await call("/mine?status=resolved")).json()).tickets).toHaveLength(1);
+    expect((await call("/mine?limit=999")).status).toBe(400);
+    expect((await call("/mine?ownerUserId=someone")).status).toBe(400);
+  });
+
+  it("accepts a real linked Cloud session while keeping the same account-owned history", async () => {
+    state.customer = { ...customerContext(), sessionKind: "bearer" };
+    expect(await (await call("/session")).json()).toEqual({
+      account: { ...state.customer.user, key: state.customer.userId },
+    });
+    const ticket = await createCustomerTicket();
+    state.customer = customerContext();
+    expect(
+      (await (await call("/mine")).json()).tickets.map((row: { id: string }) => row.id),
+    ).toEqual([ticket.id]);
+    expect(await repo.find(ticket.id)).toMatchObject({
+      ownerUserId: "customer-one",
+      email: "customer-one@example.com",
+    });
+    const changedAccount = await app.request("/api/cloud/support/mine", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [CLOUD_SUPPORT_ACCOUNT_HEADER]: "earlier-cloud-account",
+      },
+      body: JSON.stringify(customerInput()),
+    });
+    expect(changedAccount.status).toBe(409);
+    expect(await repo.list({ limit: 25 })).toHaveLength(1);
+  });
+
+  it("rejects API/native credentials and keeps the Cloud operator/intake router off local instances", async () => {
+    const ticket = await createCustomerTicket();
+    const paths = [
+      ["GET", "/session"],
+      ["GET", "/mine"],
+      ["POST", "/mine", customerInput()],
+      ["GET", `/mine/${ticket.id}`],
+      ["POST", `/mine/${ticket.id}/replies`, { requestId: randomUUID(), message: "Reply" }],
+      ["PATCH", `/mine/${ticket.id}`, { status: "resolved" }],
+    ] as const;
+    state.customer = null;
+    for (const [method, path, body] of paths)
+      expect((await call(path, method, body)).status).toBe(401);
+    for (const credential of [
+      { sessionKind: "bearer", principalKind: "pat" },
+      { sessionKind: "bearer", principalKind: "oauth" },
+      { sessionKind: "bearer", tokenScope: { tokenId: "scoped-pat" } },
+      {
+        sessionKind: "cookie",
+        credential: { organizationId: "shared-organization", readOnly: true },
+      },
+      { sessionKind: "zero-auth" },
+      { sessionKind: "native" },
+    ] as const) {
+      state.customer = { ...customerContext(), ...credential };
+      for (const [method, path, body] of paths)
+        expect((await call(path, method, body)).status).toBe(403);
+    }
+    state.customer = customerContext();
+    state.env.CLOUD_MODE = false;
+    for (const [method, path, body] of paths)
+      expect((await call(path, method, body)).status).toBe(404);
   });
 });

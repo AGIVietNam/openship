@@ -11,6 +11,10 @@ vi.mock("@repo/db", async (importOriginal) => {
   };
 });
 
+vi.mock("@repo/platform/engine/lib/cloud/require-cloud", () => ({
+  requireCloud: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { syncComposeServices } from "@repo/platform/engine/modules/services/service.service";
 
 /**

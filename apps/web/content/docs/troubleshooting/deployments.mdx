@@ -64,9 +64,23 @@ Deploy again. Openship remembers these values for future deploys and redeploys.
 </Steps>
 
 <Callout type="info" title="Static sites don't run a start command">
-If your project is a static site, a leftover start command is harmless — it's ignored, the deploy
-continues, and the files are served from the edge.
+If your project is a static site, its application start command is ignored. A file-based release
+is served by the edge; a managed Docker deployment serves the built files from its generated web container.
 </Callout>
+
+## The static build succeeds, but the output directory is missing
+
+**Output Directory** is relative to **Root Directory**, where the build command runs.
+For a site in `apps/site` that builds into `apps/site/out`, set:
+
+| Setting | Value |
+|---|---|
+| Root Directory | `apps/site` |
+| Output Directory | `out` |
+
+Do not repeat `apps/site` in Output Directory. Check that the build actually creates the folder
+and its intended public files. The release saves this resolved path for routing and rollback;
+the repository root is not published in place of a missing build output.
 
 ## A required command (or the port) is missing
 

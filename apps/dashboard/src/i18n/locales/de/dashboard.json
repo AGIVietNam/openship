@@ -55,6 +55,7 @@
     "appsEmptyDesc": "Ein Klick, vollständig selbst gehostet — Datenbanken, Automatisierung, Analytics, Passwort-Vaults und mehr, auf deinen eigenen Servern."
   },
   "nav": {
+    "support": "Support",
     "scale": "Skalierung",
     "home": "Startseite",
     "new-project": "Neues Projekt",
@@ -74,6 +75,7 @@
     "addMailbox": "Postfach hinzufügen",
     "webmail": "Webmail",
     "sections": {
+      "help": "Hilfe",
       "main": "Allgemein",
       "settings": "Einstellungen",
       "infrastructure": "Infrastruktur",
@@ -83,7 +85,8 @@
       "account": "Konto"
     },
     "apps": "Apps",
-    "jobs": "Jobs"
+    "jobs": "Jobs",
+    "workspaces": "Arbeitsbereiche"
   },
   "sidebar": {
     "expand": "Seitenleiste ausklappen",

@@ -6,13 +6,14 @@ import { presentProject } from "../../../projects";
 import { authorization } from "../../lib/authorization";
 import { refreshProjectFaviconIfStale } from "../../lib/favicon-detector";
 import { fetchOrgCloudProjects } from "../../lib/cloud/projects";
+import { canProxyCloudResources } from "../../lib/cloud/scope";
 import * as projectService from "./project.service";
 
 /** The dashboard overview, reused by native and remote callers after list authorization. */
 export async function getProjectHome(ctx: ExecutionContext) {
   const { userId, organizationId } = ctx;
   const restricted = !!ctx.tokenScope || ctx.role === "restricted";
-  const accountView = ctx.scopeMode !== "fixed" && !restricted && !ctx.credential?.organizationId;
+  const accountView = canProxyCloudResources(ctx);
 
   // Surface a structured payload that includes the user's full org list +
   // a per-org project count. The dashboard uses this to render a

@@ -17,6 +17,10 @@ function recordingServiceDatabase(initial: Record<string, unknown>) {
   let row = initial;
   const writes: Array<Record<string, unknown>> = [];
   const db = {
+    transaction: async (run: (tx: Database) => Promise<unknown>) => run(db),
+    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({
+      for: async () => [{ deletionInProgress: false, cloudPromotion: null }],
+    }) }) }) }),
     query: { service: { findMany: async () => [row] } },
     update: () => ({
       set: (data: Record<string, unknown>) => ({

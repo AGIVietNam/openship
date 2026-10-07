@@ -21,7 +21,7 @@ interface UpdatesBlockProps {
  * read, one definition, and every source the feed grows reaches the home page free.
  */
 export default function UpdatesBlock({ feed }: UpdatesBlockProps) {
-  const { broken, behind, busyId, resolve, infraFix, hide } = feed;
+  const { broken, behind, busyIds, resolve, infraFix, hide } = feed;
 
   if (feed.cards === 0) return null;
 
@@ -30,7 +30,7 @@ export default function UpdatesBlock({ feed }: UpdatesBlockProps) {
       {feed.showBroken && (
         <IssuesCard
           issues={broken}
-          busyId={busyId}
+          busyIds={busyIds}
           onResolve={resolve}
           onInfraFix={infraFix}
           onHide={() => hide("broken")}
@@ -39,7 +39,7 @@ export default function UpdatesBlock({ feed }: UpdatesBlockProps) {
       {feed.showBehind && (
         <UpdatesCard
           issues={behind}
-          busyId={busyId}
+          busyIds={busyIds}
           onResolve={resolve}
           onInfraFix={infraFix}
           onHide={() => hide("behind")}

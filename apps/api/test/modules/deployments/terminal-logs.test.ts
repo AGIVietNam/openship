@@ -11,6 +11,34 @@ const entry = (message: string, extra: Partial<LogEntry> = {}): LogEntry => ({
 });
 
 describe("collapseTerminalLogs", () => {
+  const raw = (message: string | Buffer, extra: Partial<LogEntry> = {}) => entry(message.toString(), {
+    rawData: Buffer.from(message).toString("base64"), ...extra,
+  });
+
+  it("reassembles raw chunks, including split CRLF and UTF-8, in saved build logs", () => {
+    const unicode = Buffer.from("café ready\r\n");
+    const out = collapseTerminalLogs([
+      raw("#5 Install"), raw("ing dependencies\r"), raw("\n"),
+      raw(unicode.subarray(0, 4)), raw(unicode.subarray(4)),
+      raw("last partial line"), entry("Build complete"),
+    ]);
+    expect(out.map(e => e.message)).toEqual(["#5 Installing dependencies", "café ready", "last partial line", "Build complete"]);
+    expect(out.every(e => e.rawData === undefined)).toBe(true);
+  });
+
+  it("keeps interleaved raw service streams separate", () => {
+    const out = collapseTerminalLogs([
+      raw("down", { serviceId: "api", serviceName: "api" }),
+      raw("web done\n", { serviceId: "web", serviceName: "web" }),
+      raw("loaded\n", { serviceId: "api", serviceName: "api" }),
+    ]);
+    expect(out.map(e => [e.serviceId, e.message])).toEqual([["web", "web done"], ["api", "downloaded"]]);
+  });
+
+  it("collapses progress redraws split across raw chunks", () => {
+    expect(collapseTerminalLogs([raw("Installing 10%\r"), raw("Installing 100%\n")])
+      .map(e => e.message)).toEqual(["Installing 100%"]);
+  });
   it("keeps consecutive newline-less entries as SEPARATE lines (per-service build output)", () => {
     // Docker build steps arrive as discrete entries with no trailing newline.
     const out = collapseTerminalLogs([

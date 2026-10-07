@@ -14,6 +14,7 @@ const deploymentRepo = vi.hoisted(() => ({ findById: vi.fn(), updateStatus: vi.f
 
 const routeState = vi.hoisted(() => ({
   listProjectRouteRows: vi.fn(),
+  persistProjectRouteState: vi.fn(),
   reapplyProjectLiveRoutes: vi.fn(),
   resolveProjectRouteState: vi.fn(),
   syncProjectRouteState: vi.fn(),
@@ -29,20 +30,23 @@ vi.mock("@repo/db", async (importOriginal) => {
       ...actual.repos,
       project: projectRepo,
       service: serviceRepo,
+      domain: { ...actual.repos.domain, listByProject: routeState.listProjectRouteRows },
       deployment: { ...actual.repos.deployment, ...deploymentRepo },
     },
   };
 });
 
-vi.mock("@repo/platform/engine/modules/domains/project-route.service", () => ({
-  deriveEnvironmentPublicEndpoints: vi.fn(),
-  deriveNextProjectRouteState: vi.fn(),
-  listProjectRouteRows: routeState.listProjectRouteRows,
-  persistProjectRouteState: vi.fn(),
-  reapplyProjectLiveRoutes: routeState.reapplyProjectLiveRoutes,
-  resolveProjectRouteState: routeState.resolveProjectRouteState,
-  syncProjectRouteState: routeState.syncProjectRouteState,
-}));
+vi.mock("@repo/platform/engine/modules/domains/project-route.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@repo/platform/engine/modules/domains/project-route.service")>();
+  return {
+    ...actual,
+    listProjectRouteRows: routeState.listProjectRouteRows,
+    persistProjectRouteState: routeState.persistProjectRouteState,
+    reapplyProjectLiveRoutes: routeState.reapplyProjectLiveRoutes,
+    resolveProjectRouteState: routeState.resolveProjectRouteState,
+    syncProjectRouteState: routeState.syncProjectRouteState,
+  };
+});
 
 vi.mock("@repo/platform/engine/modules/domains/routing-apply.service", () => ({
   applyProjectRouting,
@@ -58,7 +62,7 @@ const project = {
   name: "Portfolio",
   port: 4321,
   activeDeploymentId: "dep_123",
-  cloudWorkspaceId: null,
+  workspaceId: null,
   resources: null,
   buildResources: null,
   sleepMode: "auto_sleep",
@@ -72,6 +76,7 @@ describe("updateProject route persistence", () => {
     deploymentRepo.findById.mockReset().mockResolvedValue(undefined);
     deploymentRepo.updateStatus.mockReset().mockResolvedValue(undefined);
     routeState.listProjectRouteRows.mockReset();
+    routeState.persistProjectRouteState.mockReset().mockResolvedValue(undefined);
     routeState.reapplyProjectLiveRoutes.mockReset();
     routeState.resolveProjectRouteState.mockReset();
     routeState.syncProjectRouteState.mockReset();
@@ -114,7 +119,7 @@ describe("updateProject route persistence", () => {
 
     await vi.waitFor(() => expect(routeState.reapplyProjectLiveRoutes).toHaveBeenCalled());
     expect(settled).toBe(false);
-    expect(routeState.syncProjectRouteState).toHaveBeenCalled();
+    expect(routeState.persistProjectRouteState).toHaveBeenCalled();
     // `managedEdgeSyncedByCaller` is asserted, not loosened away: updateProject runs
     // its own `syncProjectManagedEdge` afterwards, and letting the re-apply sync the
     // same free domain too raced it — two challenges for one target, the second
@@ -132,8 +137,7 @@ describe("updateProject route persistence", () => {
   it("does not start a live route writer after deletion has claimed the project", async () => {
     projectRepo.findById
       .mockResolvedValueOnce(project)
-      .mockResolvedValueOnce({ ...project, deletionInProgress: true })
-      .mockResolvedValue(project);
+      .mockResolvedValue({ ...project, deletionInProgress: true });
 
     await updateProject(
       project.id,
@@ -143,7 +147,7 @@ describe("updateProject route persistence", () => {
       project.organizationId,
     );
 
-    expect(routeState.syncProjectRouteState).toHaveBeenCalled();
+    expect(routeState.persistProjectRouteState).toHaveBeenCalled();
     expect(routeState.reapplyProjectLiveRoutes).not.toHaveBeenCalled();
     expect(applyProjectRouting).not.toHaveBeenCalled();
   });
@@ -151,8 +155,7 @@ describe("updateProject route persistence", () => {
   it("also gates a routingConfig-only live writer after deletion claims the project", async () => {
     projectRepo.findById
       .mockResolvedValueOnce(project)
-      .mockResolvedValueOnce({ ...project, deletionInProgress: true })
-      .mockResolvedValue(project);
+      .mockResolvedValue({ ...project, deletionInProgress: true });
 
     await updateProject(
       project.id,
@@ -255,6 +258,7 @@ describe("updateProject route persistence", () => {
       ).rejects.toThrow(/is not a valid custom domain/);
 
       expect(projectRepo.update).not.toHaveBeenCalled();
+      expect(routeState.persistProjectRouteState).not.toHaveBeenCalled();
       expect(routeState.syncProjectRouteState).not.toHaveBeenCalled();
       expect(routeState.reapplyProjectLiveRoutes).not.toHaveBeenCalled();
     });
@@ -284,7 +288,7 @@ describe("updateProject route persistence", () => {
       project.organizationId,
     );
 
-    expect(routeState.syncProjectRouteState).toHaveBeenCalled();
+    expect(routeState.persistProjectRouteState).toHaveBeenCalled();
   });
 
   it("refuses a NEW bad hostname even on a project that already has one", async () => {
@@ -315,7 +319,11 @@ describe("updateProject route persistence", () => {
       project.organizationId,
     );
 
-    expect(routeState.syncProjectRouteState).toHaveBeenCalled();
+    expect(routeState.persistProjectRouteState).toHaveBeenCalledWith(
+      project.id,
+      [expect.objectContaining({ customDomain: "app.example.com", domainType: "custom", port: 4321 })],
+      expect.any(Array),
+    );
   });
 
   /**

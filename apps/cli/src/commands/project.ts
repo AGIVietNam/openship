@@ -13,6 +13,12 @@ import { getShipClient, ApiError } from "../lib/ship-client";
 import type { CreateProjectInput, TSetReleaseSourceBody } from "@repo/sdk";
 import { fetchCaps, requireSelfHost } from "../lib/caps";
 import { isJsonMode, printJson, printTable, ok, err, info } from "../lib/output";
+import { parseOptionalEnvironmentScope } from "@repo/sdk/client";
+import { collect, parsePairs } from "../lib/command-input";
+import {
+  projectUpdateCommand, projectEnvironmentCommand, projectResourcesCommand,
+  projectStorageCommand, projectConnectionsCommand, projectInspectionCommands,
+} from "./project-management";
 import {
   renderReleaseImage,
   validateReleaseRepository,
@@ -60,8 +66,6 @@ function printProject(project: Record<string, unknown>): void {
     process.stdout.write(`  ${chalk.dim(k.padEnd(12))} ${String(v)}\n`);
   }
 }
-
-const ENVIRONMENTS = ["production", "preview", "development"];
 
 interface ReleaseImageOptions {
   imageTemplate: string;
@@ -287,7 +291,7 @@ envCmd
   .option("--environment <env>", "Filter by environment (production|preview|development)")
   .action(
     action(async (id: string, opts) => {
-      const data = await getShipClient().projects.listEnvVars(id, { environment: opts.environment });
+      const data = await getShipClient().projects.listEnvVars(id, { environment: parseOptionalEnvironmentScope(opts.environment) });
       printTable(
         data.map((v) => ({
           key: v.key,
@@ -309,45 +313,27 @@ envCmd
   .option(
     "--set <pair>",
     "KEY=VALUE to upsert (repeatable)",
-    (val: string, acc: string[] = []) => {
-      acc.push(val);
-      return acc;
-    },
+    collect,
     [] as string[],
   )
   .option(
     "--unset <key>",
     "KEY to delete (repeatable)",
-    (val: string, acc: string[] = []) => {
-      acc.push(val);
-      return acc;
-    },
+    collect,
     [] as string[],
   )
   .option("--secret", "Mark every --set value as a secret")
   .action(
     action(async (id: string, opts) => {
-      if (!ENVIRONMENTS.includes(opts.environment)) {
-        err(`  environment must be one of: ${ENVIRONMENTS.join(", ")}`);
-        process.exitCode = 1;
-        return;
-      }
-      const upserts = (opts.set as string[]).map((pair) => {
-        const eq = pair.indexOf("=");
-        if (eq === -1) throw new Error(`--set expects KEY=VALUE, got "${pair}"`);
-        return {
-          key: pair.slice(0, eq),
-          value: pair.slice(eq + 1),
-          isSecret: !!opts.secret,
-        };
-      });
+      const environment = parseOptionalEnvironmentScope(opts.environment) ?? "production";
+      const upserts = Object.entries(parsePairs(opts.set)).map(([key, value]) => ({ key, value, isSecret: !!opts.secret }));
       const deletes = opts.unset as string[];
       if (upserts.length === 0 && deletes.length === 0) {
         err("  Nothing to do — pass --set and/or --unset.");
         process.exitCode = 1;
         return;
       }
-      const result = await getShipClient().projects.mergeEnvVars(id, { environment: opts.environment, upserts, deletes });
+      const result = await getShipClient().projects.mergeEnvVars(id, { environment, upserts, deletes });
       if (isJsonMode()) {
         printJson(result);
         return;
@@ -607,18 +593,7 @@ const serverLogsCmd = new Command("server-logs")
         return;
       }
 
-      // Streaming path branches on deployment shape. Cloud projects mint an edge
-      // token the browser connects to directly — not yet wired in the CLI — so we
-      // only follow self-hosted OpenResty streams here.
-      const token = await getShipClient().projects.getServerLogStreamToken(id, { domain });
-      if (token.kind === "cloud") {
-        info("  Cloud server-log streaming is coming soon — view it in the dashboard.");
-        info("  Showing recent entries instead:");
-        const { logs } = await getShipClient().projects.recentServerLogs(id, { domain });
-        printJson(logs);
-        return;
-      }
-
+      // The SDK selects and authenticates the supported stream for this target.
       for await (const ev of getShipClient().projects.streamServerLogs(id, { domain })) {
         if (ev.event === "error") {
           const parsed = safeParse(ev.data);
@@ -667,3 +642,5 @@ projectCommand.addCommand(sleepModeCmd);
 projectCommand.addCommand(transferCmd);
 projectCommand.addCommand(logsCmd);
 projectCommand.addCommand(serverLogsCmd);
+for (const command of [projectUpdateCommand, projectEnvironmentCommand, projectResourcesCommand,
+  projectStorageCommand, projectConnectionsCommand, ...projectInspectionCommands]) projectCommand.addCommand(command);

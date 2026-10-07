@@ -60,6 +60,7 @@
   "fix": "Beheben",
   "install": "Installieren",
   "update": "Update",
+  "updating": "Wird aktualisiert…",
   "mailSetup": "Mail-Setup",
   "selfUpdateNote": "Diese Installation aktualisiert sich über die Kommandozeile.",
   "empty": {

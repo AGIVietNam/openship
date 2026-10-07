@@ -1,10 +1,11 @@
 import { api } from "./client";
 import { endpoints } from "./endpoints";
-import type { PlanTierId, CreditPackDefinition } from "@repo/core";
+import type { PlanTierId, CreditPackDefinition, CustomServerResources } from "@repo/core";
 import type { ApiPlan } from "@/components/billing/PricingCards";
-import type { BillingSubscription, BillingResources, BillingCheckoutStatus, BillingState as BillingStateContract, CloudCapacityOverview, CloudCapacityEdit, CloudCapacityPreview } from "@repo/contracts";
+import type { BillingSubscription, BillingResources, BillingCheckoutStatus, BillingCreditAlerts, BillingCustomQuote, BillingState as BillingStateContract, BillingOperations, BillingPlanChange, BillingPlanChangeQuote } from "@repo/contracts";
 import { trackCloudEvent } from "../cloud-analytics";
-export type { BillingResources } from "@repo/contracts";
+import type { BillingPendingCheckouts, BillingCheckoutActionInput, BillingCheckoutActionResult } from "@repo/contracts";
+export type { BillingResources, BillingCreditAlerts } from "@repo/contracts";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -18,7 +19,9 @@ export type { BillingResources } from "@repo/contracts";
  * Period dates arrive over JSON as ISO strings (not `Date`).
  */
 export interface BillingState {
+  workspace?: BillingStateContract["workspace"];
   creditAlert?: BillingStateContract["creditAlert"];
+  compute?: BillingStateContract["compute"];
   tier: PlanTierId;
   status: string;
   currentPeriod: {
@@ -43,7 +46,7 @@ export interface BillingState {
   /** Display-only: out of credits (Oblien is the real enforcer). */
   overQuota: boolean;
   /** Build time this period in minutes (openship-derived; Oblien has no build meter). */
-  buildTimeMinutes: number;
+  buildTimeMinutes: number | null;
   /** Build allowance resets monthly, even for an annual subscription. */
   buildMinutesResetAt?: string;
   maxServiceMachine?: { tier: string; cpuCores: number; memoryMb: number } | null;
@@ -115,6 +118,7 @@ export type UsageGroupBy = "hour" | "day";
  * grouped by day.
  */
 export interface UsageQuery {
+  workspaceId?: string;
   from?: string;
   to?: string;
   groupBy?: UsageGroupBy;
@@ -174,29 +178,43 @@ interface Envelope<T> {
 /* ------------------------------------------------------------------ */
 
 export const billingApi = {
-  getCapacity: async (): Promise<CloudCapacityOverview> => {
-    return (await api.get<Envelope<CloudCapacityOverview>>(endpoints.billing.capacity)).data;
+  listCheckouts: async (workspaceId?: string): Promise<BillingPendingCheckouts> =>
+    (await api.get<Envelope<BillingPendingCheckouts>>(endpoints.billing.checkouts, { params: { workspaceId } })).data,
+  resumeCheckout: async (input: BillingCheckoutActionInput): Promise<BillingCheckoutActionResult> =>
+    (await api.post<Envelope<BillingCheckoutActionResult>>(endpoints.billing.checkoutResume, input)).data,
+  cancelCheckout: async (input: BillingCheckoutActionInput): Promise<BillingCheckoutActionResult> =>
+    (await api.post<Envelope<BillingCheckoutActionResult>>(endpoints.billing.checkoutCancel, input)).data,
+  previewSubscriptionChange: async (input: Parameters<BillingOperations["previewSubscriptionChange"]>[0]): Promise<BillingPlanChangeQuote> =>
+    (await api.post<Envelope<BillingPlanChangeQuote>>(endpoints.billing.changePreview, input)).data,
+  confirmSubscriptionChange: async (input: Parameters<BillingOperations["confirmSubscriptionChange"]>[0]): Promise<BillingPlanChange> =>
+    (await api.post<Envelope<BillingPlanChange>>(endpoints.billing.change, input)).data,
+  getSubscriptionChange: async (changeId: string, workspaceId?: string): Promise<BillingPlanChange> =>
+    (await api.get<Envelope<BillingPlanChange>>(endpoints.billing.change, { params: { changeId, workspaceId } })).data,
+  cancelSubscriptionChange: async (changeId: string, workspaceId?: string): Promise<BillingPlanChange> =>
+    (await api.post<Envelope<BillingPlanChange>>(endpoints.billing.changeCancel, { changeId, workspaceId })).data,
+  quoteCustomPlan: async (resources: CustomServerResources): Promise<BillingCustomQuote> => {
+    const res = await api.get<Envelope<BillingCustomQuote>>(endpoints.billing.customQuote, { params: { ...resources } });
+    return res.data;
   },
-  previewCapacity: async (input: CloudCapacityEdit): Promise<CloudCapacityPreview> => {
-    return (await api.post<Envelope<CloudCapacityPreview>>(endpoints.billing.capacityPreview, input)).data;
-  },
-  applyCapacity: async (input: CloudCapacityEdit & { idempotencyKey: string; confirmRestart: true }) => {
-    return (await api.post<Envelope<{ deploymentId: string; projectId: string }>>(endpoints.billing.capacityApply, input)).data;
-  },
-  getCheckoutStatus: async (checkoutId: string): Promise<BillingCheckoutStatus> => {
+  getCheckoutStatus: async (checkoutId: string, workspaceId?: string): Promise<BillingCheckoutStatus> => {
     const res = await api.get<Envelope<BillingCheckoutStatus>>(endpoints.billing.checkout, {
-      params: { checkoutId },
+      params: { checkoutId, workspaceId },
     });
     return res.data;
   },
   /** Dashboard overview snapshot — tier, status, period, credit balance. */
-  getBillingState: async (): Promise<BillingState> => {
-    const res = await api.get<Envelope<BillingState>>(endpoints.billing.state);
+  getBillingState: async (workspaceId?: string): Promise<BillingState> => {
+    const res = await api.get<Envelope<BillingState>>(endpoints.billing.state, { params: { workspaceId } });
     return res.data;
   },
 
-  getResources: async (): Promise<BillingResources> => {
-    const res = await api.get<Envelope<BillingResources>>(endpoints.billing.resources);
+  getCreditAlerts: async (): Promise<BillingCreditAlerts> => {
+    const res = await api.get<Envelope<BillingCreditAlerts>>(endpoints.billing.creditAlerts);
+    return res.data;
+  },
+
+  getResources: async (workspaceId?: string): Promise<BillingResources> => {
+    const res = await api.get<Envelope<BillingResources>>(endpoints.billing.resources, { params: { workspaceId } });
     return res.data;
   },
 
@@ -210,6 +228,7 @@ export const billingApi = {
         from: params.from,
         to: params.to,
         groupBy: params.groupBy,
+        workspaceId: params.workspaceId,
       },
     });
     return res.data;
@@ -227,11 +246,12 @@ export const billingApi = {
   createSubscriptionCheckout: async (
     planTierId: SubscriptionPlanTierId,
     interval: SubscriptionInterval,
+    workspaceId?: string,
   ): Promise<{ checkoutUrl: string }> => {
     trackCloudEvent({ event: "cloud_checkout_clicked", properties: { kind: "subscription", surface: "billing" } });
     const res = await api.post<Envelope<{ checkoutUrl: string }>>(
       endpoints.billing.subscription,
-      { planTierId, interval, idempotencyKey: crypto.randomUUID() },
+      { planTierId, interval, workspaceId, idempotencyKey: crypto.randomUUID() },
     );
     return res.data;
   },
@@ -239,11 +259,11 @@ export const billingApi = {
   /**
    * Start an Oblien-hosted top-up. Oblien applies credits after payment.
    */
-  createTopupCheckout: async (packId: string): Promise<{ checkoutUrl: string }> => {
+  createTopupCheckout: async (packId: string, workspaceId?: string): Promise<{ checkoutUrl: string }> => {
     trackCloudEvent({ event: "cloud_checkout_clicked", properties: { kind: "topup", surface: "billing" } });
     const res = await api.post<Envelope<{ checkoutUrl: string }>>(
       endpoints.billing.topup,
-      { packId, idempotencyKey: crypto.randomUUID() },
+      { packId, workspaceId, idempotencyKey: crypto.randomUUID() },
     );
     return res.data;
   },
@@ -253,20 +273,21 @@ export const billingApi = {
    * payment methods + invoices. Each call returns a fresh short-lived
    * URL — never cache.
    */
-  getPortalUrl: async (): Promise<{ portalUrl: string }> => {
+  getPortalUrl: async (workspaceId?: string): Promise<{ portalUrl: string }> => {
     const res = await api.post<Envelope<{ portalUrl: string }>>(
       endpoints.billing.portal,
+      { workspaceId },
     );
     return res.data;
   },
 
-  cancelSubscription: async (): Promise<{ cancelAt: string | null; subscription: BillingSubscription }> => {
-    const res = await api.post<Envelope<{ cancelAt: string | null; subscription: BillingSubscription }>>(endpoints.billing.cancel);
+  cancelSubscription: async (workspaceId?: string): Promise<{ cancelAt: string | null; subscription: BillingSubscription }> => {
+    const res = await api.post<Envelope<{ cancelAt: string | null; subscription: BillingSubscription }>>(endpoints.billing.cancel, { workspaceId });
     return res.data;
   },
 
-  resumeSubscription: async (): Promise<{ subscription: BillingSubscription }> => {
-    const res = await api.post<Envelope<{ subscription: BillingSubscription }>>(endpoints.billing.resume);
+  resumeSubscription: async (workspaceId?: string): Promise<{ subscription: BillingSubscription }> => {
+    const res = await api.post<Envelope<{ subscription: BillingSubscription }>>(endpoints.billing.resume, { workspaceId });
     return res.data;
   },
 };

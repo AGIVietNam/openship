@@ -12,22 +12,41 @@ vi.mock("../../src/lib/config", () => ({
     h.added.push({ name, opts });
   },
   setActiveContext: vi.fn(),
+  withCommandContext: (action: () => unknown) => action(),
 }));
 vi.mock("../../src/lib/caps", () => ({ fetchCaps: async () => ({}) }));
 
 import { loginCommand } from "../../src/commands/login";
 import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
 import { runCommand, stubFetch, type FetchStub } from "../helpers/harness";
+import { setJsonMode } from "../../src/lib/output";
 
 let fetchStub: FetchStub;
 beforeEach(() => {
   h.contexts = {};
   h.added = [];
-  fetchStub = stubFetch(() => ({ status: 200, json: [] })); // /api/tokens validation passes
+  fetchStub = stubFetch(() => ({ status: 200, json: { data: [] } })); // /api/tokens validation passes
 });
-afterEach(() => fetchStub.restore());
+afterEach(() => { fetchStub.restore(); setJsonMode(false); });
 
 describe("openship login endpoint preservation", () => {
+  it("returns secret-free JSON after non-interactive authentication", async () => {
+    setJsonMode(true);
+    const result = await runCommand(loginCommand, ["--token", "opsh_pat_json_secret", "--context", "ci"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ authenticated: true, context: "ci", scoped: false });
+    expect(result.out + result.err).not.toContain("opsh_pat_json_secret");
+  });
+
+  it("never prompts in JSON mode when no token was supplied", async () => {
+    setJsonMode(true);
+    const result = await runCommand(loginCommand, []);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("--token");
+    expect(result.out).toBe("");
+    expect(fetchStub.calls).toEqual([]);
+    expect(h.added).toEqual([]);
+  });
   it("re-login without --api-url keeps the context's saved endpoints (not localhost)", async () => {
     h.contexts.prod = {
       apiUrl: "https://api.prod.example.com",

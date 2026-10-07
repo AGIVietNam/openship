@@ -36,9 +36,9 @@ const serverRepo = vi.hoisted(() => ({
   getInOrganization: vi.fn(),
 }));
 
-// Fully mocked (no importOriginal) so the test never boots a real PGlite —
-// ensureProject only ever touches these three repos.
-vi.mock("@repo/db", () => ({
+// Keep the shared routing normalizer real; all repository I/O stays isolated.
+vi.mock("@repo/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@repo/db")>()),
   repos: {
     project: projectRepo,
     projectGroup: projectGroupRepo,
@@ -58,6 +58,7 @@ vi.mock("@repo/platform/engine/modules/domains/project-route.service", () => ({
   deriveEnvironmentPublicEndpoints: vi.fn(),
   deriveNextProjectRouteState: vi.fn(() => ({ publicEndpoints: [] })),
   persistProjectRouteState: vi.fn(),
+  prepareProjectRouteState: vi.fn(() => ({ projectDomains: [], publicEndpoints: [] })),
   reapplyProjectLiveRoutes: vi.fn(),
   resolveProjectRouteState: vi.fn(),
   syncProjectRouteState: vi.fn(),

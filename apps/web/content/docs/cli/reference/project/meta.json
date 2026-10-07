@@ -2,6 +2,7 @@
   "title": "project",
   "pages": [
     "index",
+    "connections",
     "git"
   ]
 }

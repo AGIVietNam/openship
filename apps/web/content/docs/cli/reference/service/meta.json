@@ -1,6 +1,7 @@
 {
   "title": "service",
   "pages": [
-    "index"
+    "index",
+    "env"
   ]
 }

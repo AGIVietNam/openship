@@ -86,16 +86,13 @@ jobs:
           workflow: .github/workflows/release-gate.yml
           job-id: test
 
-      # `latest`, matching what CI has always run these suites on. Deliberately NOT
-      # switched to the pinned .bun-version here: these two jobs now block releases,
-      # and changing their runtime in the same move that made them blocking is how you
-      # get a gate whose first red run nobody can attribute. Worth revisiting as its
-      # own change — a gate arguably should be reproducible.
+      # The API network tests spawn Bun directly. Test the runtime shipped by
+      # the API image and release bundle, including its TLS and WebSocket paths.
       - name: Setup Bun
         if: steps.resume.outputs.reused != 'true'
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Cache bun install
         if: steps.resume.outputs.reused != 'true'

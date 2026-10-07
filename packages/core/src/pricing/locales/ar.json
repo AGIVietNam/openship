@@ -22,7 +22,7 @@
     },
     "hobby": {
       "name": "Hobby",
-      "tagline": "للتطوير الخفيف والتطبيقات العرضية، مع رصيد استخدام محدود."
+      "tagline": "خادم مُدار صغير لمشاريعك الشخصية وتطبيقاتك اليومية."
     }
   },
   "features": {
@@ -31,7 +31,7 @@
     "anyWorkload": "شغّل أي شيء — حاويات وCompose وعمليات خلفية وPostgres وRedis",
     "runningServices": "{runningServices} تطبيق أو قاعدة بيانات أو عملية خلفية قيد التشغيل",
     "buildMinutes": "{buildMinutes} دقيقة بناء شهريًا",
-    "meteredBuilds": "تستهلك عمليات البناء الرصيد المشترك دون حد زمني شهري منفصل",
+    "sharedBuilds": "عمليات البناء تشارك موارد خادمك، دون حد زمني شهري",
     "power": "حتى {powerCpu} vCPU و{powerRamGb} GB RAM لكل تطبيق",
     "projects": "{maxProjects} مشروع",
     "projectsUnlimited": "مشاريع غير محدودة",
@@ -55,10 +55,8 @@
     "selfHostedServices": "كل الخدمات المُدارة — Postgres وRedis والبريد",
     "selfHostedClients": "CLI وواجهة ويب وتطبيق سطح مكتب — خدمة خلفية واحدة",
     "selfHostedFreeSubdomains": "{freeSubdomains} نطاق فرعي مجاني على {freeDomainSuffix} عند الربط مع Openship Cloud",
-    "usageCredits": "{credits} رصيد استخدام شهريًا",
-    "namespaceCapacity": "الإجمالي: {namespaceCpu} vCPU، و{namespaceRamGb} GB ذاكرة، و{namespaceDiskGb} GB تخزين",
-    "finiteUsage": "قد تحتاج الاستضافة المستمرة إلى شحن رصيد إضافي.",
-    "oneRunningService": "تطبيق أو قاعدة بيانات أو عامل واحد قيد التشغيل"
+    "monthlyCoverage": "المعالج والذاكرة والتخزين مشمولة طوال الشهر المدفوع",
+    "namespaceCapacity": "الإجمالي: {namespaceCpu} vCPU، و{namespaceRamGb} GB ذاكرة، و{namespaceDiskGb} GB تخزين"
   },
   "selfHosted": {
     "name": "استضافة ذاتية",

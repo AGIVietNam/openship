@@ -20,14 +20,15 @@ const h = vi.hoisted(() => ({
   assert: vi.fn(async (_ctx: ExecutionContext, _input: PermissionInput) => {}),
   counts: vi.fn(async () => ({ srv1: 3, srv2: 1 }) as Record<string, number>),
   rows: [
-    { id: "srv1", name: "web-1", isLocal: false, sshHost: "203.0.113.10", sshPort: 22, sshUser: "root", createdAt: "2026-01-01", sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
-    { id: "srv2", name: "web-2", isLocal: false, sshHost: "203.0.113.11", sshPort: 22, sshUser: "root", createdAt: "2026-01-01", sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
-    { id: "srv3", name: "web-3", isLocal: false, sshHost: "203.0.113.12", sshPort: 22, sshUser: "root", createdAt: "2026-01-01", sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
+    { id: "srv1", name: "web-1", isLocal: false, sshHost: "203.0.113.10", sshPort: 22, sshUser: "root", createdAt: new Date("2026-01-01T00:00:00Z"), sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
+    { id: "srv2", name: "web-2", isLocal: false, sshHost: "203.0.113.11", sshPort: 22, sshUser: "root", createdAt: new Date("2026-01-01T00:00:00Z"), sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
+    { id: "srv3", name: "web-3", isLocal: false, sshHost: "203.0.113.12", sshPort: 22, sshUser: "root", createdAt: new Date("2026-01-01T00:00:00Z"), sshAuthMethod: null, sshKeyPath: null, sshPrivateKey: null, sshJumpHost: null, sshArgs: null },
   ],
 }));
 
 vi.mock("@repo/db", () => ({
   repos: {
+    settings: { findOrgOwnerCloudLink: vi.fn(async () => null) },
     server: {
       listByOrganization: vi.fn(async () => h.rows),
       getInOrganization: vi.fn(async (id: string) => h.rows.find((r) => r.id === id) ?? null),
@@ -118,7 +119,7 @@ describe("GET /servers/:id carries projectCount", () => {
 
 // The application seams moved with the shared engine.
 vi.mock("@repo/platform/engine/lib/authorization", () => ({
-  authorization: { authorize: async (ctx: ExecutionContext, input: PermissionInput) => { await h.assert(ctx, input); return ctx; } },
+  authorization: { checkPermissionOnResource: vi.fn(async () => true), authorize: async (ctx: ExecutionContext, input: PermissionInput) => { await h.assert(ctx, input); return ctx; } },
 }));
 
 // Keep the controller unit focused on this real shared operation group.

@@ -1,12 +1,18 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, timestamp, integer, boolean, index, check } from "drizzle-orm/pg-core";
 
-/** Private Cloud operator records. Never included in customer/instance exports. */
+/** Cloud support records. Customer access is explicitly scoped to ownerUserId;
+ * anonymous intake stays operator-only. Never included in instance exports. */
 export const cloudSupportTicket = pgTable(
   "cloud_support_ticket",
   {
     id: text("id").primaryKey(),
     inputHash: text("input_hash").notNull(),
+    ownerUserId: text("owner_user_id"),
+    category: text("category")
+      .$type<"deployment" | "billing" | "account" | "general">()
+      .notNull()
+      .default("general"),
     name: text("name").notNull(),
     email: text("email").notNull(),
     subject: text("subject").notNull(),
@@ -18,6 +24,11 @@ export const cloudSupportTicket = pgTable(
   },
   (t) => [
     index("cloud_support_ticket_created").on(t.createdAt, t.id),
+    index("cloud_support_ticket_owner_created").on(t.ownerUserId, t.createdAt, t.id),
+    check(
+      "cloud_support_ticket_category_check",
+      sql`${t.category} IN ('deployment', 'billing', 'account', 'general')`,
+    ),
     check("cloud_support_ticket_source_check", sql`${t.source} IN ('support', 'contact')`),
     check("cloud_support_ticket_status_check", sql`${t.status} IN ('open', 'resolved')`),
   ],
@@ -31,7 +42,7 @@ export const cloudSupportMessage = pgTable(
     ticketId: text("ticket_id")
       .notNull()
       .references(() => cloudSupportTicket.id, { onDelete: "cascade" }),
-    kind: text("kind").$type<"receipt" | "notification" | "reply">().notNull(),
+    kind: text("kind").$type<"receipt" | "notification" | "reply" | "customer_reply">().notNull(),
     body: text("body"),
     resolve: boolean("resolve").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -44,7 +55,7 @@ export const cloudSupportMessage = pgTable(
   (t) => [
     check(
       "cloud_support_message_kind_check",
-      sql`${t.kind} IN ('receipt', 'notification', 'reply')`,
+      sql`${t.kind} IN ('receipt', 'notification', 'reply', 'customer_reply')`,
     ),
     index("cloud_support_message_ticket").on(t.ticketId, t.createdAt),
     index("cloud_support_message_pending")

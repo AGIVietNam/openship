@@ -15,8 +15,11 @@
  * No client-side cookies or tokens are ever involved.
  */
 import { repos } from "@repo/db";
+import { SDK_SCOPE_HEADER } from "@repo/contracts";
+import { createHash } from "node:crypto";
 import { cloudRuntimeTarget, cloudRuntimeTargetId, env } from "../../config/env";
 import { decrypt } from "../encryption";
+import type { StoredCloudSession } from "./types";
 import {
   APP_VERSION,
   OPENSHIP_VERSION_HEADER,
@@ -26,6 +29,35 @@ import {
 /** Max wait for the SaaS to send response headers before we give up (503).
  *  Bounds every proxied call; body streaming continues past this once headers land. */
 const CLOUD_FETCH_HEADER_TIMEOUT_MS = 60_000;
+
+export type CloudIdentity = Omit<StoredCloudSession, "token">;
+
+export function sameCloudIdentity(left: CloudIdentity, right: CloudIdentity): boolean {
+  return left.apiUrl === right.apiUrl && left.userId === right.userId &&
+    left.organizationId === right.organizationId;
+}
+
+/** Only credentials verified at connect time are usable. Changing the configured
+ * Cloud API or linking another account requires a new, explicitly verified link. */
+export async function readCloudSession(userId: string): Promise<StoredCloudSession | null> {
+  const settings = await repos.settings.findByUser(userId);
+  if (!settings?.cloudSessionToken) return null;
+  try {
+    const session = JSON.parse(decrypt(settings.cloudSessionToken)) as StoredCloudSession;
+    if (!session || session.apiUrl !== cloudRuntimeTarget.api ||
+      typeof session.token !== "string" || !session.token ||
+      typeof session.userId !== "string" || !session.userId ||
+      typeof session.organizationId !== "string" || !session.organizationId) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+/** A reconnect can never hit credentials cached under a different session. */
+export function cloudSessionCacheKey(userId: string, session: StoredCloudSession): string {
+  return `${userId}:${createHash("sha256").update(JSON.stringify(session)).digest("hex")}`;
+}
 
 /**
  * Make an authenticated request to the SaaS as `userId`: read the stored
@@ -42,24 +74,11 @@ export async function cloudFetch(
   userId: string,
   path: string,
   init?: RequestInit,
+  expectedIdentity?: CloudIdentity,
 ): Promise<Response | null> {
-  const settings = await repos.settings.findByUser(userId);
-  if (!settings?.cloudSessionToken) return null;
-
-  // A stored token that won't decrypt — a rotated/mismatched BETTER_AUTH_SECRET,
-  // or a token written by a different instance (e.g. the CLI box vs `bun dev`) —
-  // is unusable. Treat it as "no session" (→ graceful "not connected") instead
-  // of throwing an unhandled 500 out of the status endpoint. Re-connecting
-  // overwrites it with a token sealed under the current key.
-  let sessionToken: string;
-  try {
-    sessionToken = decrypt(settings.cloudSessionToken);
-  } catch {
-    console.warn(
-      `[cloud-client] cloudSessionToken for ${userId} failed to decrypt (BETTER_AUTH_SECRET mismatch?) — treating as disconnected`,
-    );
-    return null;
-  }
+  const session = await readCloudSession(userId);
+  if (!session || (expectedIdentity && !sameCloudIdentity(session, expectedIdentity))) return null;
+  if (!path.startsWith("/api/") || path.includes("#")) throw new Error("Invalid Cloud API path");
 
   const targetUrl = `${cloudRuntimeTarget.api}${path}`;
   const method = (init?.method ?? "GET").toUpperCase();
@@ -71,21 +90,18 @@ export async function cloudFetch(
   const timer = setTimeout(() => controller.abort(), CLOUD_FETCH_HEADER_TIMEOUT_MS);
   let res: Response;
   try {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    headers.set(OPENSHIP_VERSION_HEADER, APP_VERSION);
+    headers.set(OPENSHIP_PLATFORM_HEADER, env.DEPLOY_MODE);
+    headers.set("X-Organization-Id", session.organizationId);
+    headers.set(SDK_SCOPE_HEADER, "fixed");
+    headers.set("Authorization", `Bearer ${session.token}`);
     res = await fetch(targetUrl, {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...init?.headers,
-        // Identify THIS self-hosted instance's version + platform to the cloud
-        // on every call, so the SaaS can gate on an outdated client (deprecate
-        // old wire formats, nudge/force upgrades, etc.). Set AFTER the caller's
-        // headers so they can't be spoofed/overridden by a request, and BEFORE
-        // Authorization which is likewise authoritative.
-        [OPENSHIP_VERSION_HEADER]: APP_VERSION,
-        [OPENSHIP_PLATFORM_HEADER]: env.DEPLOY_MODE,
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      signal: controller.signal,
+      headers,
+      redirect: "error",
+      signal: init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal,
     });
   } catch (err) {
     console.warn(`[cloud-client] fetch failed ${targetUrl}: ${(err as Error).message}`);
@@ -95,13 +111,65 @@ export async function cloudFetch(
   }
   console.log(`[cloud-client] ← ${method} ${targetUrl} ${res.status}`);
 
+  // An account switch can finish while the upstream request is in flight.
+  // Do not deliver the previous account's inventory, credentials or response.
+  const current = await readCloudSession(userId);
+  if (!current || !sameCloudIdentity(session, current)) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+
   if (res.status === 401) {
     console.warn(
       `[cloud-client] 401 from SaaS for ${path} — leaving stored session intact; caller should surface the auth error.`,
     );
   }
 
+  if (res.body && res.headers.get("content-type")?.includes("text/event-stream"))
+    return pinnedCloudStream(res, userId, session);
   return res;
+}
+
+/** Live logs stop when the account is disconnected or replaced. Keep normal
+ * stream backpressure; do not buffer an entire deployment in this gateway. */
+function pinnedCloudStream(response: Response, userId: string, identity: CloudIdentity): Response {
+  const reader = response.body!.getReader();
+  let ended = false;
+  let checking = false;
+  let timer: ReturnType<typeof setInterval>;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      timer = setInterval(() => {
+        if (ended || checking) return;
+        checking = true;
+        void readCloudSession(userId).then(current => {
+          if (!ended && (!current || !sameCloudIdentity(identity, current))) {
+            ended = true; clearInterval(timer);
+            controller.close();
+            void reader.cancel().catch(() => {});
+          }
+        }).catch(() => {
+          if (ended) return;
+          ended = true; clearInterval(timer);
+          controller.close();
+          void reader.cancel().catch(() => {});
+        }).finally(() => { checking = false; });
+      }, 5_000);
+      timer.unref?.();
+    },
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (ended) return;
+        if (next.done) { ended = true; clearInterval(timer); controller.close(); }
+        else controller.enqueue(next.value);
+      } catch (error) {
+        if (!ended) { ended = true; clearInterval(timer); controller.error(error); }
+      }
+    },
+    async cancel(reason) { ended = true; clearInterval(timer); await reader.cancel(reason); },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 /**
@@ -137,6 +205,7 @@ export async function cloudFetchAsOrgOwner(
   organizationId: string,
   path: string,
   init?: RequestInit,
+  expectedIdentity?: CloudIdentity,
 ): Promise<Response | null> {
   const userId = await resolveOrgCloudUserId(organizationId);
   if (!userId) {
@@ -149,7 +218,7 @@ export async function cloudFetchAsOrgOwner(
     );
     return null;
   }
-  return cloudFetch(userId, path, init);
+  return cloudFetch(userId, path, init, expectedIdentity);
 }
 
 /**

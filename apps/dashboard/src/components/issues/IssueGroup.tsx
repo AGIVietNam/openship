@@ -18,7 +18,7 @@ export function IssueGroup({
   scope,
   issues,
   standAlone,
-  busyId,
+  busyIds,
   onResolve,
   onInfraFix,
   onRecheck,
@@ -29,7 +29,7 @@ export function IssueGroup({
   /** True when nothing louder than an advisory is anywhere on the page — an
    *  advisory panel then wears amber instead of the muted surface. */
   standAlone: boolean;
-  busyId: string | null;
+  busyIds: ReadonlySet<string>;
   onResolve: (issue: SystemIssue) => void;
   onInfraFix: (issue: SystemIssue) => void;
   onRecheck?: () => void;
@@ -54,7 +54,7 @@ export function IssueGroup({
             key={issue.id}
             issue={issue}
             density="comfortable"
-            busy={busyId === issue.id}
+            busy={busyIds?.has(issue.id) ?? false}
             onResolve={onResolve}
             onInfraFix={onInfraFix}
             onRecheck={onRecheck}

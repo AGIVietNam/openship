@@ -5,9 +5,10 @@ import { isJsonMode, info, ok, err } from "./output";
 
 export type StreamResult = DeploymentStreamResult;
 
-export async function streamDeploymentLogs(deploymentId: string): Promise<StreamResult> {
+export async function streamDeploymentLogs(deploymentId: string, timeoutMs = 600_000): Promise<StreamResult> {
   const client = getShipClient();
-  const result = await consumeDeploymentEvents(client.deployments.events(deploymentId), (event) => {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const result = await consumeDeploymentEvents(client.deployments.events(deploymentId, { signal }), (event) => {
     if (event.event === "ping") return;
     if (isJsonMode()) {
       process.stdout.write(JSON.stringify({ event: event.event, ...event.payload, ...(event.log !== undefined && { message: event.log }) }) + "\n");
@@ -17,10 +18,10 @@ export async function streamDeploymentLogs(deploymentId: string): Promise<Stream
       info(`\n${String(event.payload.title ?? "Deployment needs a decision")}: ${String(event.payload.message ?? "")}`);
       info(`Inspect it with openship deployment pending ${deploymentId}, then respond with openship deployment respond ${deploymentId} --action <action>.`);
     }
-  });
+  }, { stopOnPrompt: true });
 
   if (!result.completed && !isJsonMode()) info("Event stream ended; checking deployment status…");
-  const outcome = await client.deployment(deploymentId).wait();
+  const outcome = await client.deployment(deploymentId).wait({ signal });
   result.status = outcome.status;
   result.success = outcome.success;
   result.message = outcome.message ?? result.message;

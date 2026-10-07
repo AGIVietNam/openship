@@ -20,10 +20,11 @@ import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
  *   ssl renew  POST  /deployments/ssl/renew     { domain, includeWww? }
  */
 import { Command } from "commander";
-import { createInterface } from "node:readline";
 import { getShipClient, assertLinkedProjectConnection, ApiError } from "../lib/ship-client";
 import { readProjectLink } from "../lib/project-link";
 import { isJsonMode, printJson, printTable, ok, err } from "../lib/output";
+import { confirmOrExit } from "../lib/cmd-helpers";
+import { positiveInteger, timeoutMilliseconds } from "../lib/command-input";
 
 /** Wrap a subcommand action so ApiError surfaces cleanly and exits non-zero. */
 function run<A extends unknown[]>(fn: (...args: A) => Promise<void>) {
@@ -46,14 +47,6 @@ function report(res: unknown, message: string): void {
 
 function shortSha(v: unknown): string {
   return typeof v === "string" ? v.slice(0, 7) : "";
-}
-
-async function confirm(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return true;
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise<string>((resolve) => rl.question(`${question} [y/N] `, resolve));
-  rl.close();
-  return /^y(es)?$/i.test(answer.trim());
 }
 
 const list = new Command("list")
@@ -209,10 +202,7 @@ const rm = new Command("rm")
   .option("-y, --yes", "Skip the confirmation prompt")
   .action(
     run(async (id: string, opts) => {
-      if (!opts.yes && !isJsonMode() && !(await confirm(`Delete deployment ${id}?`))) {
-        err("Aborted.");
-        exitCommand(1);
-      }
+      await confirmOrExit(opts.yes, `Delete deployment ${id}?`);
       const res = await getShipClient().deployments.remove(id);
       report(res, `Deleted ${id}`);
     }),
@@ -273,6 +263,17 @@ const respond = new Command("respond")
     report(result, `Response accepted for ${id}`);
   }));
 
+const wait = new Command("wait")
+  .description("Wait for the persisted deployment outcome or a decision that needs your response")
+  .argument("<id>", "Deployment ID")
+  .option("--timeout <ms>", "Maximum wait duration; leaves the deployment running on timeout", timeoutMilliseconds, 600_000)
+  .option("--interval <ms>", "Status polling interval (minimum 10 ms)", positiveInteger, 1000)
+  .action(run(async (id: string, opts) => {
+    const result = await getShipClient().deployment(id).wait({ timeoutMs: opts.timeout, pollIntervalMs: opts.interval });
+    printJson(result);
+    if (!result.success) exitCommand(1);
+  }));
+
 export const deploymentCommand = new Command("deployment")
   .alias("deployments")
   .description("Manage deployments (list, inspect, redeploy, rollback, …)")
@@ -289,5 +290,6 @@ export const deploymentCommand = new Command("deployment")
   .addCommand(keep)
   .addCommand(pending)
   .addCommand(respond)
+  .addCommand(wait)
   .addCommand(rm)
   .addCommand(ssl);

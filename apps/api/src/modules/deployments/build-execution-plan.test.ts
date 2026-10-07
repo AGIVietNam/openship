@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
+import { BareRuntime, LocalExecutor, resolveStaticOutputPath } from "@repo/adapters";
 
 import {
   resolveBuildRuntimeModes,
@@ -86,7 +90,7 @@ describe("resolveBuildRuntimeModes (pre-resolve flip, as data)", () => {
     ).toEqual({ buildRuntimeMode: "docker", serveRuntimeMode: "bare" });
   });
 
-  it("static cloud target → no flip (CloudRuntime owns it)", () => {
+  it("static cloud target → uses its selected runtime mode", () => {
     expect(
       resolveBuildRuntimeModes({
         workload: "static",
@@ -135,7 +139,7 @@ describe("resolveBuildRuntimeModes (pre-resolve flip, as data)", () => {
     }
   });
 
-  it("prebuilt single-app image → Docker locally/remotely, Cloud unchanged", () => {
+  it("prebuilt single-app images use Docker on every server transport", () => {
     for (const [baseTarget, effectiveTarget] of [
       ["desktop", "local"],
       ["desktop", "server"],
@@ -164,7 +168,7 @@ describe("resolveBuildRuntimeModes (pre-resolve flip, as data)", () => {
           willRunServices: false,
           hasPrebuiltImage: true,
         }),
-      ).toEqual({ buildRuntimeMode: undefined, serveRuntimeMode: undefined });
+      ).toEqual({ buildRuntimeMode: "docker", serveRuntimeMode: "docker" });
     }
   });
 });
@@ -187,12 +191,6 @@ describe("resolveDeployRouting (post-resolve, keyed off runtime.name)", () => {
     }
   });
 
-  it("static + cloud runtime → static-edge (Oblien Pages), normal build", () => {
-    expect(
-      resolveDeployRouting({ workload: "static", runtimeName: "cloud", outputDirectory: "dist" }),
-    ).toEqual({ buildMode: "normal", deployMode: "static-edge", staticServeOutputDir: "" });
-  });
-
   it("static + docker runtime → sandbox build, file-serve, doc-root already extracted", () => {
     expect(
       resolveDeployRouting({ workload: "static", runtimeName: "docker", outputDirectory: "dist" }),
@@ -211,6 +209,73 @@ describe("resolveDeployRouting (post-resolve, keyed off runtime.name)", () => {
       deployMode: "static-file-serve",
       staticServeOutputDir: "dist",
     });
+  });
+
+  it("publishes a bare monorepo's built site without exposing the repository root", async () => {
+    const workDir = await mkdtemp(join(tmpdir(), "openship-static-monorepo-"));
+    const release = join(workDir, "releases", "dep_static");
+    const runtime = new BareRuntime({ workDir, executor: new LocalExecutor() });
+    try {
+      await mkdir(join(release, "apps/site/out"), { recursive: true });
+      await writeFile(join(release, "private-source.txt"), "source must not be published");
+      await writeFile(join(release, "apps/site/out/index.html"), "built site");
+      const routing = resolveDeployRouting({
+        workload: "static", runtimeName: "bare", managedServer: true,
+        rootDirectory: "apps/site", outputDirectory: "out",
+      });
+      const deployed = await runtime.deployStatic({
+        projectId: "proj_static", deploymentId: "dep_static", imageRef: release,
+        outputDirectory: routing.staticServeOutputDir,
+      } as Parameters<BareRuntime["deployStatic"]>[0]);
+      expect(deployed.containerId).toBe(release);
+      const docRoot = resolveStaticOutputPath(deployed.containerId!, routing.staticServeOutputDir);
+      expect(await readFile(join(docRoot, "index.html"), "utf8")).toBe("built site");
+      await expect(readFile(join(docRoot, "private-source.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Rollback uses the saved offset even if today's build settings differ.
+      const next = resolveDeployRouting({
+        workload: "static", runtimeName: "bare", rootDirectory: "other", outputDirectory: "dist",
+      });
+      expect(reusedReleaseRouting(next, routing.staticServeOutputDir).staticServeOutputDir)
+        .toBe("apps/site/out");
+    } finally {
+      await runtime.dispose();
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["apps/site", "out", "apps/site/out"],
+    [" /apps/site/ ", "out", "apps/site/out"],
+    ["apps/site", ".", "apps/site"],
+    ["apps/site", "", "apps/site"],
+    ["apps/site", "build/../out", "apps/site/out"],
+    [".", "out", "out"],
+  ])("keeps bare output relative to its build root: %s + %s", (rootDirectory, outputDirectory, expected) => {
+    expect(resolveDeployRouting({ workload: "static", runtimeName: "bare", rootDirectory, outputDirectory })
+      .staticServeOutputDir).toBe(expected);
+  });
+
+  it.each([
+    ["../outside", "out"],
+    ["apps/site", "../private"],
+    ["apps/site", "/etc"],
+  ])("rejects static output escaping the project: %s + %s", (rootDirectory, outputDirectory) => {
+    expect(() => resolveDeployRouting({ workload: "static", runtimeName: "bare", rootDirectory, outputDirectory }))
+      .toThrow(/escapes|absolute/);
+  });
+
+  it("does not prepend the monorepo path to an extracted Docker artifact", () => {
+    expect(resolveDeployRouting({
+      workload: "static", runtimeName: "docker", rootDirectory: "apps/site", outputDirectory: "out",
+    }).staticServeOutputDir).toBe("");
+  });
+
+  it("keeps managed Docker static sites in the generated web image", () => {
+    expect(resolveDeployRouting({
+      workload: "static", runtimeName: "docker", managedServer: true,
+      rootDirectory: "apps/site", outputDirectory: "out",
+    })).toEqual({ buildMode: "normal", deployMode: "server", staticServeOutputDir: "" });
   });
 });
 
@@ -261,7 +326,6 @@ describe("reusedReleaseRouting (a release that already exists)", () => {
     for (const routing of [
       resolveDeployRouting({ workload: "web", runtimeName: "docker", outputDirectory: "dist" }),
       resolveDeployRouting({ workload: "worker", runtimeName: "docker", outputDirectory: "dist" }),
-      resolveDeployRouting({ workload: "static", runtimeName: "cloud", outputDirectory: "dist" }),
     ]) {
       expect(reusedReleaseRouting(routing, "dist")).toBe(routing);
     }

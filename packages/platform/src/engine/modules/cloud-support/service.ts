@@ -3,10 +3,19 @@ import { AppError, ConflictError, NotFoundError, SUPPORT_EMAIL, ValidationError 
 import {
   CloudSupportInputSchema,
   CloudSupportReplySchema,
+  CloudSupportCustomerInputSchema,
+  CloudSupportCustomerReplySchema,
+  CloudSupportCustomerQuerySchema,
+  CloudSupportCustomerStatusSchema,
   parseInput,
   type CloudSupportReceipt,
+  type CloudSupportCustomerDetail,
+  type CloudSupportCustomerList,
+  type CloudSupportCustomerTicket,
+  type CloudSupportSession,
 } from "@repo/contracts";
 import type { CloudSupportRepo, CloudSupportTicket } from "@repo/db/repos";
+import type { ExecutionContext } from "../../../context";
 import type { SendMailOptions } from "../../lib/mail";
 import { supportEmail } from "../../lib/email-templates";
 
@@ -14,6 +23,14 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 const receipt = (ticket: CloudSupportTicket): CloudSupportReceipt => ({
   id: ticket.id,
   createdAt: ticket.createdAt.toISOString(),
+});
+const customerTicket = (ticket: CloudSupportTicket): CloudSupportCustomerTicket => ({
+  id: ticket.id,
+  subject: ticket.subject,
+  category: ticket.category,
+  status: ticket.status,
+  createdAt: ticket.createdAt.toISOString(),
+  updatedAt: ticket.updatedAt.toISOString(),
 });
 
 export class CloudSupportService {
@@ -28,6 +45,140 @@ export class CloudSupportService {
 
   private requireCloud() {
     if (!this.options.enabled()) throw new NotFoundError("Support");
+  }
+
+  private customer(ctx: ExecutionContext) {
+    this.requireCloud();
+    // Account support can contain private conversations unrelated to an
+    // organization's infrastructure grants. API tokens never inherit access.
+    // Cloud links carry a real Better Auth session as a server-side Bearer.
+    // PAT/OAuth bearers are different principals and never inherit this access.
+    if (
+      !["cookie", "bearer"].includes(ctx.sessionKind) ||
+      ctx.principalKind ||
+      ctx.tokenScope ||
+      ctx.credential ||
+      !ctx.sessionId ||
+      !ctx.userId ||
+      ctx.user?.id !== ctx.userId
+    )
+      throw new AppError(
+        "Sign in to Openship Cloud to manage your support tickets.",
+        403,
+        "SUPPORT_SESSION_REQUIRED",
+      );
+    return ctx.user;
+  }
+
+  assertCustomerAccount(ctx: ExecutionContext, expectedKey?: string) {
+    const user = this.customer(ctx);
+    if (expectedKey !== undefined && expectedKey !== user.id)
+      throw new AppError(
+        "Your support account changed. Reload Support before continuing.",
+        409,
+        "SUPPORT_ACCOUNT_CHANGED",
+      );
+  }
+
+  sessionForCustomer(ctx: ExecutionContext): CloudSupportSession {
+    const user = this.customer(ctx);
+    return { account: { id: user.id, name: user.name, email: user.email, key: user.id } };
+  }
+
+  async submitForCustomer(
+    ctx: ExecutionContext,
+    raw: unknown,
+    beforeCreate: (subject: string) => Promise<void>,
+  ) {
+    const user = this.customer(ctx);
+    const input = parseInput(CloudSupportCustomerInputSchema, raw);
+    const value = {
+      subject: input.subject.trim(),
+      message: input.message.trim(),
+      category: input.category,
+    };
+    if (!value.subject || !value.message)
+      throw new ValidationError("Subject and message cannot be blank.");
+    const id = `SUP-${hash(`customer:${user.id}:${input.requestId.toLowerCase()}`).slice(0, 24).toUpperCase()}`;
+    const inputHash = hash(JSON.stringify(value));
+    const existing = await this.options.repo.findForUser(id, user.id);
+    if (existing) {
+      if (existing.inputHash !== inputHash)
+        throw new ConflictError("This request reference was already used for a different message.");
+      return receipt(existing);
+    }
+    await beforeCreate(hash(user.id));
+    return receipt(
+      await this.options.repo.create({
+        id,
+        inputHash,
+        ...value,
+        ownerUserId: user.id,
+        name: user.name?.trim() || user.email,
+        email: user.email,
+        source: "support",
+      }),
+    );
+  }
+
+  async listForCustomer(ctx: ExecutionContext, raw: unknown): Promise<CloudSupportCustomerList> {
+    const user = this.customer(ctx);
+    const input = parseInput(CloudSupportCustomerQuerySchema, raw);
+    const rows = await this.options.repo.list({ ...input, ownerUserId: user.id });
+    const page = rows.slice(0, input.limit);
+    return {
+      tickets: page.map(customerTicket),
+      nextCursor: rows.length > input.limit ? page.at(-1)!.id : null,
+    };
+  }
+
+  async getForCustomer(ctx: ExecutionContext, id: string): Promise<CloudSupportCustomerDetail> {
+    const user = this.customer(ctx);
+    const ticket = await this.options.repo.findForUser(id, user.id);
+    if (!ticket) throw new NotFoundError("Support ticket");
+    const messages = await this.options.repo.messages(id);
+    return {
+      ticket: { ...customerTicket(ticket), message: ticket.message },
+      // Mail receipts, delivery leases, SMTP errors and operator addresses are
+      // not conversation content and never enter the customer response.
+      messages: messages.flatMap((message) =>
+        (message.kind === "reply" || message.kind === "customer_reply") && message.body
+          ? [
+              {
+                id: message.id,
+                author: message.kind === "reply" ? ("support" as const) : ("customer" as const),
+                body: message.body,
+                createdAt: message.createdAt.toISOString(),
+              },
+            ]
+          : [],
+      ),
+    };
+  }
+
+  async replyForCustomer(
+    ctx: ExecutionContext,
+    id: string,
+    raw: unknown,
+    beforeCreate: (subject: string) => Promise<void>,
+  ) {
+    const user = this.customer(ctx);
+    const input = parseInput(CloudSupportCustomerReplySchema, raw);
+    const body = input.message.trim();
+    if (!body) throw new ValidationError("Reply cannot be blank.");
+    if (!(await this.options.repo.findForUser(id, user.id)))
+      throw new NotFoundError("Support ticket");
+    const messageId = `${id}:customer:${input.requestId.toLowerCase()}`;
+    if (!(await this.options.repo.findMessage(id, messageId))) await beforeCreate(hash(user.id));
+    await this.options.repo.reply(id, { id: messageId, body, resolve: false }, user.id);
+    return this.getForCustomer(ctx, id);
+  }
+
+  async setStatusForCustomer(ctx: ExecutionContext, id: string, raw: unknown) {
+    const user = this.customer(ctx);
+    const { status } = parseInput(CloudSupportCustomerStatusSchema, raw);
+    await this.options.repo.setStatus(id, status, user.id);
+    return this.getForCustomer(ctx, id);
   }
 
   async submit(raw: unknown, beforeCreate: (recipientHash: string) => Promise<void>) {
@@ -117,8 +268,14 @@ export class CloudSupportService {
             const ticket = await this.options.repo.find(message.ticketId);
             if (!ticket) throw new NotFoundError("Support ticket");
             const accepted = await this.options.send({
-              to: message.kind === "notification" ? SUPPORT_EMAIL : ticket.email,
-              replyTo: message.kind === "notification" ? ticket.email : SUPPORT_EMAIL,
+              to:
+                message.kind === "notification" || message.kind === "customer_reply"
+                  ? SUPPORT_EMAIL
+                  : ticket.email,
+              replyTo:
+                message.kind === "notification" || message.kind === "customer_reply"
+                  ? ticket.email
+                  : SUPPORT_EMAIL,
               messageId: `<support-${hash(message.id)}@openship.io>`,
               ...supportEmail({ ...ticket, kind: message.kind, reply: message.body }),
             });

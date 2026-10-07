@@ -1,6 +1,6 @@
 {
   "name": "@repo/platform",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
@@ -30,7 +30,9 @@
     "build:native": "bun run build-native.ts"
   },
   "dependencies": {
+    "@better-auth/core": "^1.5.4",
     "@better-auth/drizzle-adapter": "^1.5.4",
+    "@better-auth/passkey": "1.5.4",
     "@octokit/auth-oauth-device": "^8.0.3",
     "@octokit/request": "^10.0.8",
     "@repo/adapters": "workspace:*",
@@ -42,6 +44,7 @@
     "bullmq": "^5.70.4",
     "cron-parser": "^4.9.0",
     "dockerode": "^4.0.9",
+    "drizzle-orm": "^0.45.1",
     "ioredis": "^5.10.0",
     "ipaddr.js": "^2.4.0",
     "maxmind": "^5.0.6",

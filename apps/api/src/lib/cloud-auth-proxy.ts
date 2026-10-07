@@ -12,7 +12,8 @@
 
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { db, schema, repos, eq } from "@repo/db";
-import { encrypt } from "@repo/platform/engine/lib/encryption";
+import { storeCloudSession } from "@repo/platform/engine/lib/cloud/session";
+import { fetchCloudConnection } from "@repo/platform/engine/lib/cloud/connection";
 import { provisionUser } from "@repo/platform/engine/lib/provision-user";
 import { cloudRuntimeTarget, env } from "@repo/platform/engine/config/env";
 import { safeErrorMessage } from "@repo/core";
@@ -62,31 +63,6 @@ async function mirrorCloudUser(cloudUser: CloudUser): Promise<string> {
   });
 
   return id;
-}
-
-/**
- * Store the cloud session token (encrypted) for later cloud API calls.
- *
- * After storing, wipe every cache derived from the cloud session
- * (validated-connection, profile, namespace token, and GitHub caches).
- * A fresh connect must reflect atomically — a stale "disconnected"
- * cache or an old user's namespace token would otherwise linger up to
- * its TTL and make the just-connected user look disconnected / wrong.
- */
-async function storeCloudSession(userId: string, cloudSessionToken: string): Promise<void> {
-  const encrypted = encrypt(cloudSessionToken);
-  const settings = await repos.settings.findByUser(userId);
-  if (settings) {
-    await repos.settings.update(userId, { cloudSessionToken: encrypted });
-  } else {
-    await repos.settings.upsert({
-      id: randomUUID(),
-      userId,
-      cloudSessionToken: encrypted,
-    });
-  }
-  const { invalidateCloudCaches } = await import("@repo/platform/engine/lib/cloud/session");
-  await invalidateCloudCaches(userId);
 }
 
 /**
@@ -277,24 +253,11 @@ async function exchangeCodeWithCloud(
   codeVerifier?: string,
 ): Promise<{ user: CloudUser; sessionToken: string } | null> {
   const url = `${cloudRuntimeTarget.api}/api/cloud/exchange-code`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, code_verifier: codeVerifier }),
-    });
-  } catch (err) {
-    // Network error (DNS, ECONNREFUSED, timeout). The cloud SaaS is
-    // unreachable from this host. Log so the operator can see WHY the
-    // connect popup says "Connection Failed".
-    console.error(
-      `[cloud-auth] exchange-code fetch failed: ${url} — ${
-        safeErrorMessage(err)
-      }`,
-    );
-    return null;
-  }
+  const res = await fetchCloudConnection("/api/cloud/exchange-code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, code_verifier: codeVerifier }),
+  });
   if (!res.ok) {
     console.error(
       `[cloud-auth] exchange-code returned ${res.status} from ${url}`,

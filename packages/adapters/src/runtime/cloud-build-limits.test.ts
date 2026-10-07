@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DockerRuntime } from "./docker";
 import { BuildLogger } from "./build-pipeline";
-import type { BuildConfig } from "../types";
+import type { BuildConfig, LogCallback, LogEntry } from "../types";
 
 const config = {
   projectId: "project",
@@ -24,19 +24,36 @@ function fixture(transport = "cloud", buildKit = true) {
   });
   return {
     executor,
-    run: (signal?: AbortSignal) =>
+    run: (signal?: AbortSignal, onLog?: LogCallback) =>
       runtime.buildImageOnRemote(
         config,
         "/tmp/build dir",
         "Dockerfile",
         "openship/test:build",
-        new BuildLogger(),
+        new BuildLogger(onLog),
         { signal },
       ),
   };
 }
 
 describe("Cloud Docker build execution limits", () => {
+  it.each(["cloud", "ssh"])("preserves fragmented %s terminal output without adding line breaks", async transport => {
+    const h = fixture(transport);
+    const original = "#5 installing dependencies\r\n#5 café ready\r\n";
+    const bytes = Buffer.from(original);
+    const fragments = [bytes.subarray(0, 3), bytes.subarray(3, 12), bytes.subarray(12, 36), bytes.subarray(36)];
+    h.executor.streamExec.mockImplementation(async (_command, logger) => {
+      for (const fragment of fragments) (logger as LogCallback)({
+        timestamp: new Date().toISOString(), message: fragment.toString(),
+        level: "info", rawData: fragment.toString("base64"),
+      });
+      return { code: 0, output: original };
+    });
+    const logs: LogEntry[] = [];
+    await h.run(undefined, entry => logs.push(entry));
+    const streamed = logs.filter(entry => entry.rawData !== undefined);
+    expect(Buffer.concat(streamed.map(entry => Buffer.from(entry.rawData!, "base64"))).toString()).toBe(original);
+  });
   it("runs BuildKit inside the selected CPU/RAM budget and loads its image into the project's Docker host", async () => {
     const h = fixture();
     await h.run();
@@ -50,15 +67,18 @@ describe("Cloud Docker build execution limits", () => {
     expect(command).toContain("cd '/tmp/build dir'");
     expect(command).not.toContain("--use");
     expect(command).toContain("trap ");
-    expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force --keep-state");
+    expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force 'openship-");
+    expect(command).not.toContain("--keep-state");
+    expect(h.executor.exec.mock.calls.at(-1)![0]).not.toContain("--keep-state");
   });
   it.each([1, 137])(
-    "removes only the project's builder after a failed build (exit %s)",
+    "removes the project's builder and cache after a failed build (exit %s)",
     async (code) => {
       const h = fixture();
       h.executor.streamExec.mockResolvedValue({ code, output: "" });
       await expect(h.run()).rejects.toThrow(`docker build exited with code ${code}`);
-      expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force --keep-state");
+      expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force 'openship-");
+      expect(h.executor.exec.mock.calls.at(-1)![0]).not.toContain("--keep-state");
       expect(h.executor.exec.mock.calls.at(-1)![0]).not.toContain("prune");
     },
   );
@@ -70,7 +90,8 @@ describe("Cloud Docker build execution limits", () => {
       return { code: 0, output: "" };
     });
     await expect(h.run(controller.signal)).rejects.toMatchObject({ name: "BuildCancelledError" });
-    expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force --keep-state");
+    expect(h.executor.exec.mock.calls.at(-1)![0]).toContain("buildx rm --force 'openship-");
+    expect(h.executor.exec.mock.calls.at(-1)![0]).not.toContain("--keep-state");
   });
   it("applies the same budget to the legacy Cloud Docker builder", async () => {
     const h = fixture("cloud", false);

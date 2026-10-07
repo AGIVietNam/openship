@@ -82,6 +82,7 @@ export async function waitForDeployment(operations: DeploymentOperations, id: st
 export async function consumeDeploymentEvents(
   events: AsyncIterable<DeploymentEvent>,
   onEvent?: (event: DecodedDeploymentEvent) => void | Promise<void>,
+  options: { stopOnPrompt?: boolean } = {},
 ): Promise<DeploymentStreamResult> {
   const result: DeploymentStreamResult = { serviceCount: 0, completed: false };
   const services = new Map<string, { name: string; status: string }>();
@@ -116,6 +117,9 @@ export async function consumeDeploymentEvents(
       result.message = typeof payload.error === "string" ? payload.error : "Event stream error";
     }
     await onEvent?.({ ...event, payload, ...(log !== undefined && { log }) });
+    // Unattended callers can hand the decision back without leaving a stream
+    // open indefinitely. The persisted status still decides the final outcome.
+    if (event.event === "prompt" && options.stopOnPrompt) break;
     if (event.event === "end" || event.event === "error") break;
   }
   result.serviceCount = services.size;

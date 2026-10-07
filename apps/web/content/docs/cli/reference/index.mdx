@@ -11,6 +11,7 @@ Use `openship <command> --help` to check the version installed on your machine. 
 | --- | --- |
 | `-V, --version` | output the version number |
 | `--json` | Machine-readable JSON output (stdout data only) |
+| `--organization <id>` | Use a fixed organization scope for SDK resource commands (remote only) |
 | `--native-config <file>` | Run SDK commands using an explicitly trusted JavaScript configuration |
 | `-h, --help` | display help for command |
 
@@ -24,6 +25,8 @@ Put global options before the command, for example `openship --json project list
 | [`openship logout`](/docs/cli/reference/logout) | Remove the stored Openship token |
 | [`openship context`](/docs/cli/reference/context) | Manage connection contexts (list/use/add/rm) |
 | [`openship token`](/docs/cli/reference/token) | Manage personal access tokens |
+| [`openship access`](/docs/cli/reference/access) | Manage workspaces, members, invitations and resource grants |
+| [`openship credential`](/docs/cli/reference/credential) | Manage stored registry and DNS credentials; reads return masked secrets |
 | [`openship api`](/docs/cli/reference/api) | Make an authenticated request to any Openship API route (like `gh api`) |
 
 ## Deploy
@@ -44,6 +47,16 @@ Put global options before the command, for example `openship --json project list
 | [`openship app`](/docs/cli/reference/app) | Browse, install, and configure catalog apps |
 | [`openship service`](/docs/cli/reference/service) | Manage the services in a compose stack (a multi-service project) |
 | [`openship domain`](/docs/cli/reference/domain) | Manage custom domains, DNS verification, and SSL certificates |
+| [`openship dns`](/docs/cli/reference/dns) | Manage DNS providers and zone access |
+
+## Operations
+
+| Command | Purpose |
+| --- | --- |
+| [`openship monitoring`](/docs/cli/reference/monitoring) | Inspect issues and workload health using the platform's monitoring operations |
+| [`openship notification`](/docs/cli/reference/notification) | Manage notification channels, subscriptions and deliveries |
+| [`openship webhook`](/docs/cli/reference/webhook) | Manage incoming deploy and job webhooks |
+| [`openship audit`](/docs/cli/reference/audit) | Inspect audit events and retention settings |
 
 ## Infrastructure
 

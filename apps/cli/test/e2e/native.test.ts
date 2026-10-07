@@ -55,6 +55,36 @@ export default {
 }
 
 describe("native CLI through a real Node worker and PGlite", { timeout: 120_000 }, () => {
+  it("persists service environment edits and isolated project environments through the real engine", async () => {
+    const f = await fixture();
+    const flags = ["--native-config", await f.config(), "--json"];
+    const json = async (...args: string[]) => {
+      const result = await f.run([...flags, ...args]);
+      expect(result.code, result.stderr).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    const project = await json("project", "create", "--name", "Managed CLI", "--type", "services");
+    const service = await json("service", "create", "api", "--project", project.id, "--image", "nginx:alpine");
+    const scoped = ["--project", project.id];
+    await json("service", "env", "set", service.id, "TOKEN=persisted-cli-secret", "--secret", ...scoped);
+    await json("service", "env", "set", service.id, "MODE=ready", ...scoped);
+    const vars = await json("service", "env", "get", service.id, ...scoped);
+    expect(vars.map((row: { key: string }) => row.key).sort()).toEqual(["MODE", "TOKEN"]);
+    expect(JSON.stringify(vars)).not.toContain("persisted-cli-secret");
+    await json("service", "env", "delete", service.id, "MODE", ...scoped);
+    const effective = await json("service", "env", "inspect", service.id, ...scoped);
+    expect(effective.variables.some((row: { key: string }) => row.key === "TOKEN")).toBe(true);
+    expect(JSON.stringify(effective)).not.toContain("persisted-cli-secret");
+    expect(await json("service", "env", "reveal", service.id, "TOKEN", ...scoped)).toEqual({ TOKEN: "persisted-cli-secret" });
+    const preview = await json("project", "environment", "create", project.id, "Preview");
+    expect(preview.id).not.toBe(project.id);
+    const environments = await json("project", "environment", "list", project.id);
+    expect(environments.map((row: { id: string }) => row.id)).toEqual(expect.arrayContaining([project.id, preview.id]));
+    const workspaces = await json("access", "workspaces");
+    expect(workspaces.currentOrganizationId).toBe(project.organizationId);
+    expect((await json("monitoring", "summary")).total).toBeTypeOf("number");
+  });
+
   it("lists jobs through the native SDK without HTTP", async () => {
     const f = await fixture();
     const config = await f.config();

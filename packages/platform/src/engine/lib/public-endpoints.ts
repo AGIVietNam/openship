@@ -540,16 +540,7 @@ export function storedPublicEndpointsNeedCloud(
  * toggle never reads as introducing a route.
  */
 export function resolveServicePublicEndpoints(
-  service: Pick<
-    Service,
-    | "exposed"
-    | "exposedPort"
-    | "ports"
-    | "domain"
-    | "customDomain"
-    | "domainType"
-    | "publicEndpoints"
-  > & { name?: string | null; kind?: string | null },
+  service: ServiceRoutingPatch & Pick<Partial<Service>, "ports" | "name" | "kind">,
   opts?: { projectSlug?: string },
 ): StoredPublicEndpoint[] {
   if (!service.exposed) return [];
@@ -566,7 +557,7 @@ export function resolveServicePublicEndpoints(
         port: endpoint.port,
         domain: endpoint.domain,
         customDomain: endpoint.customDomain,
-        domainType: endpoint.domainType,
+        domainType: endpoint.domainType === "custom" ? "custom" : "free",
       })),
       normalizeOpts,
     );

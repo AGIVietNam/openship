@@ -136,6 +136,7 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await client.exec(readFileSync(new URL("../../../../../packages/db/drizzle/0167_cloud_support_customers.sql", import.meta.url), "utf8"));
   repo = createCloudSupportRepo(drizzle(client) as unknown as Database);
   const { sendMail } = await import("@repo/platform/engine/lib/mail");
   state.service = new CloudSupportService({ enabled: () => true, repo, send: sendMail });

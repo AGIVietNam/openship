@@ -12,6 +12,10 @@ export interface ProjectLink {
   name?: string;
   slug?: string;
   context?: string;
+  /** Canonical SDK API URL; also detects retargeting a named context. No credentials. */
+  apiUrl?: string;
+  /** Explicit remote organization scope, when selected at link time. */
+  organizationId?: string;
   native?: { instanceId: string; organizationId: string };
   defaults?: { environment: string };
 }

@@ -74,18 +74,24 @@ beforeEach(() => {
   deleted = [];
   preview = PREVIEW;
   deletion = () => json(REMOVED);
+  let serverRemoved = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = new URL(String(typeof input === "string" ? input : (input as Request)?.url ?? input));
       if (init?.method === "DELETE") {
         deleted.push(url);
-        return deletion();
+        const response = await deletion();
+        const result = await response.clone().json();
+        if (response.ok && result.serverRemoved === true) serverRemoved = true;
+        return response;
       }
       if (url.pathname.endsWith("/deletion-preview")) return json({ ok: true, preview });
       if (url.pathname.endsWith("/reachability"))
         return json({ reachable: false, code: "unreachable" });
-      if (url.pathname.endsWith("/system/servers")) return json([SERVER]);
+      // Connection reconciliation may refresh the list after a deletion. Model
+      // the committed server state instead of resurrecting the deleted fixture.
+      if (url.pathname.endsWith("/system/servers")) return json(serverRemoved ? [] : [SERVER]);
       // Deliberately malformed infrastructure responses: these must not disable removal.
       return json({});
     }),

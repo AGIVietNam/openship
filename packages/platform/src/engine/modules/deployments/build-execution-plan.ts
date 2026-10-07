@@ -12,12 +12,14 @@
  *      as the old inline `instanceof` checks were.
  */
 
+import { posix } from "node:path";
 import type { WorkloadType } from "@repo/core";
+import { resolveStaticOutputPath } from "@repo/adapters";
 
 export type BuildMode = "static-sandbox" | "static-bare" | "normal";
-/** `worker` = a portless long-running container: built normally, but served with
+/** `worker` = a portless long-running process: built normally, but served with
  *  no doc-root and no route (issue #538-B). */
-export type DeployMode = "static-edge" | "static-file-serve" | "server" | "worker";
+export type DeployMode = "static-file-serve" | "server" | "worker";
 export type RuntimeModeValue = "bare" | "docker";
 
 export interface BuildRuntimeModes {
@@ -41,8 +43,7 @@ export interface DeployRouting {
  * The runtime-mode decision, made BEFORE platform resolution. Encodes the two
  * historical "flips" as data:
  *   - services → Docker (containers can't run bare) for build AND serve.
- *   - a worker → Docker for build AND serve: a portless supervised container has
- *     no bare/static form (issue #538-B).
+ *   - workers default to Docker; an explicit bare choice uses the host supervisor.
  *   - a static app on a server / self-hosted host → BUILD in a Docker sandbox, but
  *     its lifecycle identity stays BARE (files served by the edge; a persisted
  *     "docker" would make rollback/purge 404-no-op on the release dir and leak it).
@@ -57,12 +58,13 @@ export function resolveBuildRuntimeModes(input: {
   /** A single-app OCI image is already built, but still needs a container
    * runtime to pull and run it. Bare mode cannot consume that artifact. */
   hasPrebuiltImage?: boolean;
+  runtimeMode?: RuntimeModeValue;
 }): BuildRuntimeModes {
   if (input.effectiveTarget === "cluster") return { buildRuntimeMode: "docker", serveRuntimeMode: "docker" };
-  if (input.hasPrebuiltImage && input.effectiveTarget !== "cloud") {
+  if (input.hasPrebuiltImage) {
     return { buildRuntimeMode: "docker", serveRuntimeMode: "docker" };
   }
-  if (input.willRunServices || input.workload === "worker") {
+  if (input.willRunServices || (input.workload === "worker" && input.runtimeMode !== "bare")) {
     return { buildRuntimeMode: "docker", serveRuntimeMode: "docker" };
   }
   if (
@@ -84,7 +86,10 @@ export function resolveBuildRuntimeModes(input: {
  */
 export function resolveDeployRouting(input: {
   workload: WorkloadType;
-  runtimeName: string; // "bare" | "docker" | "cloud"
+  runtimeName: string;
+  /** Managed Docker serves static builds in their generated image; bare publishes files. */
+  managedServer?: boolean;
+  rootDirectory?: string;
   outputDirectory: string;
 }): DeployRouting {
   if (input.workload === "web") {
@@ -95,17 +100,29 @@ export function resolveDeployRouting(input: {
   if (input.workload === "worker") {
     return { buildMode: "normal", deployMode: "worker", staticServeOutputDir: "" };
   }
-  // Static, cloud target → Oblien Pages (executeStaticEdgeDeploy); build via CloudRuntime.
-  if (input.runtimeName === "cloud") {
-    return { buildMode: "normal", deployMode: "static-edge", staticServeOutputDir: "" };
+  if (input.managedServer && input.runtimeName === "docker") {
+    return { buildMode: "normal", deployMode: "server", staticServeOutputDir: "" };
   }
   // Static, self-hosted → served as files by the edge. Docker-built → doc-root
   // already extracted (serve from release root ""); bare-built → serve from output dir.
   const dockerBuilt = input.runtimeName === "docker";
+  let staticServeOutputDir = "";
+  if (!dockerBuilt) {
+    // Bare keeps the repository tree, while build commands run inside rootDirectory.
+    // Validate both offsets using the same confinement as publication, then save
+    // the document root relative to the release so routing and rollback agree.
+    const buildRoot = "/build";
+    const rootDirectory = input.rootDirectory?.trim().replace(/^\/+|\/+$/g, "") ?? "";
+    const projectRoot = resolveStaticOutputPath(buildRoot, rootDirectory);
+    staticServeOutputDir = posix.relative(
+      buildRoot,
+      resolveStaticOutputPath(projectRoot, input.outputDirectory),
+    );
+  }
   return {
     buildMode: dockerBuilt ? "static-sandbox" : "static-bare",
     deployMode: "static-file-serve",
-    staticServeOutputDir: dockerBuilt ? "" : input.outputDirectory,
+    staticServeOutputDir,
   };
 }
 

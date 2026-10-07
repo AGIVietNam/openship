@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { beginFetchState } from "./begin-fetch-state";
 import { api, ApiError, endpoints, projectsApi } from "@/lib/api";
+import { useCloudResourceKey } from "@/context/CloudResourceContext";
 
 /**
  * Sentinel error message emitted by `fetchProjectInfo` when the API returns
@@ -197,29 +198,36 @@ const overviewCache = new Map<string, CacheEntry<AnalyticsOverviewResponse>>();
 const geoCache = new Map<string, CacheEntry<AnalyticsGeoResponse>>();
 const usageHistoryCache = new Map<string, CacheEntry<UsageHistoryResponse>>();
 
+/** Drop resolved and in-flight entries when the connected account changes.
+ * An old request cannot refill a cleared entry because writes compare promises. */
+export function clearProjectEndpointCaches(): void {
+  for (const cache of [infoCache, overviewCache, geoCache, usageHistoryCache]) cache.clear();
+}
+
 /** Mounts, polls and retries share one in-flight request for each scope. */
 function requestEndpoint<T>(
   id: string,
   cache: Map<string, CacheEntry<T>>,
   fetcher: (id: string) => Promise<T>,
+  key = id,
 ): Promise<T> {
-  const current = cache.get(id);
+  const current = cache.get(key);
   if (current?.kind === "loading") return current.promise;
   const promise = fetcher(id).then(
     (data) => {
-      const entry = cache.get(id);
+      const entry = cache.get(key);
       if (entry?.kind === "loading" && entry.promise === promise) {
-        cache.set(id, { kind: "ready", data, updatedAt: Date.now() });
+        cache.set(key, { kind: "ready", data, updatedAt: Date.now() });
       }
       return data;
     },
     (error: unknown) => {
-      const entry = cache.get(id);
-      if (entry?.kind === "loading" && entry.promise === promise) cache.delete(id);
+      const entry = cache.get(key);
+      if (entry?.kind === "loading" && entry.promise === promise) cache.delete(key);
       throw error;
     },
   );
-  cache.set(id, { kind: "loading", promise });
+  cache.set(key, { kind: "loading", promise });
   return promise;
 }
 
@@ -271,6 +279,9 @@ function useEndpoint<T>(
   // empty animates as new points land, without a page reload. 0/undefined = off.
   pollMs?: number,
 ): AsyncState<T> {
+  const scope = useCloudResourceKey();
+  const key = id ? `${scope}\0${id}` : null;
+  const [owner, setOwner] = useState(key);
   // Ref tracks the LATEST id from props at any moment. Combined with
   // the `cancelled` flag, this prevents an in-flight fetch for project
   // A from writing its result onto project B's state after the user
@@ -278,8 +289,8 @@ function useEndpoint<T>(
   // a stale `.then` resolves, but under concurrent rendering the
   // exact ordering isn't guaranteed — the ref check is the defensive
   // belt to the cancelled-flag suspenders.
-  const idRef = useRef(id);
-  idRef.current = id;
+  const idRef = useRef(key);
+  idRef.current = key;
 
   // Subscribe to this id's revision counter. When
   // invalidateProjectCaches(id) is called, the counter bumps,
@@ -295,7 +306,7 @@ function useEndpoint<T>(
 
   const [state, setState] = useState<AsyncState<T>>(() => {
     if (!id) return { data: null, isLoading: false, error: null };
-    const cached = cache.get(id);
+    const cached = cache.get(key!);
     if (cached?.kind === "ready") {
       return { data: cached.data, isLoading: false, error: null };
     }
@@ -310,9 +321,10 @@ function useEndpoint<T>(
    * Different id: whatever we hold is another project's, and reporting it as loaded would
    * render project A's page under project B's URL.
    */
-  const loadedIdRef = useRef<string | null>(id && cache.get(id)?.kind === "ready" ? id : null);
+  const loadedIdRef = useRef<string | null>(id && cache.get(key!)?.kind === "ready" ? key : null);
 
   useEffect(() => {
+    setOwner(key);
     if (!id) {
       loadedIdRef.current = null;
       setState({ data: null, isLoading: false, error: null });
@@ -320,9 +332,9 @@ function useEndpoint<T>(
     }
 
     // A polled series can have changed while the tab was unmounted.
-    const cached = cache.get(id);
+    const cached = cache.get(key!);
     if (cached?.kind === "ready" && (!pollMs || Date.now() - cached.updatedAt < pollMs)) {
-      loadedIdRef.current = id;
+      loadedIdRef.current = key;
       setState({ data: cached.data, isLoading: false, error: null });
       return;
     }
@@ -332,22 +344,22 @@ function useEndpoint<T>(
     // Load-bearing rather than a nicety — see `beginFetchState`, which owns the reasoning and
     // the infinite-loop regression it exists to prevent.
     const loadedId = loadedIdRef.current;
-    setState((prev) => beginFetchState(prev, loadedId, id));
+    setState((prev) => beginFetchState(prev, loadedId, key!));
 
-    requestEndpoint(id, cache, fetcher)
+    requestEndpoint(id, cache, fetcher, key!)
       .then((data) => {
         // Guard: don't write A's result into B's state if id has
         // changed since the effect started. Both flags together cover
         // synchronous (cancelled) and racy (idRef mismatch) cases.
-        if (cancelled || idRef.current !== id || (revKey && getRevision(revKey) !== revision)) return;
-        loadedIdRef.current = id;
+        if (cancelled || idRef.current !== key || (revKey && getRevision(revKey) !== revision)) return;
+        loadedIdRef.current = key;
         setState({ data, isLoading: false, error: null });
       })
       .catch((err: unknown) => {
         // Errors are NOT cached — drop the entry so a future mount /
         // refresh re-fires the request. Otherwise a transient 5xx
         // permanently bricks the page until full reload.
-        if (cancelled || idRef.current !== id || (revKey && getRevision(revKey) !== revision)) return;
+        if (cancelled || idRef.current !== key || (revKey && getRevision(revKey) !== revision)) return;
         const message = err instanceof Error ? err.message : "Request failed";
         // The data goes with the error, so the next revision must report loading again rather
         // than revalidating something that is no longer on screen.
@@ -361,7 +373,7 @@ function useEndpoint<T>(
     // `revision` is intentionally in deps: bumping it via
     // invalidateProjectCaches() retriggers the effect for already-
     // mounted consumers, fetching fresh data without a remount.
-  }, [id, cache, fetcher, revision, pollMs]);
+  }, [id, key, cache, fetcher, revision, pollMs]);
 
   // Poll: re-fire the fetcher on an interval, bypassing the ready-cache
   // short-circuit above. A transient failure keeps the last-good data on
@@ -371,25 +383,25 @@ function useEndpoint<T>(
     let cancelled = false;
     const refresh = () => {
       if (document.visibilityState === "hidden") return;
-      const current = cache.get(id);
+      const current = cache.get(key!);
       if (current?.kind === "ready" && Date.now() - current.updatedAt < pollMs) {
         // Another subscriber may have just refreshed the shared result.
-        loadedIdRef.current = id;
+        loadedIdRef.current = key;
         setState((prev) => prev.data === current.data && !prev.error
           ? prev
           : { data: current.data, isLoading: false, error: null });
         return;
       }
       const startedRevision = revKey ? getRevision(revKey) : 0;
-      requestEndpoint(id, cache, fetcher)
+      requestEndpoint(id, cache, fetcher, key!)
         .then((data) => {
-          if (cancelled || idRef.current !== id ||
+          if (cancelled || idRef.current !== key ||
             (revKey && getRevision(revKey) !== startedRevision)) return;
-          loadedIdRef.current = id;
+          loadedIdRef.current = key;
           setState({ data, isLoading: false, error: null });
         })
         .catch((error: unknown) => {
-          if (cancelled || idRef.current !== id ||
+          if (cancelled || idRef.current !== key ||
             (revKey && getRevision(revKey) !== startedRevision)) return;
           setState((prev) => ({
             ...prev,
@@ -405,9 +417,9 @@ function useEndpoint<T>(
       clearInterval(handle);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [id, cache, fetcher, pollMs, revKey]);
+  }, [id, key, cache, fetcher, pollMs, revKey]);
 
-  return state;
+  return owner === key ? state : { data: null, isLoading: !!id, error: null };
 }
 
 // ─── Fetcher functions ─────────────────────────────────────────────────────
@@ -670,22 +682,14 @@ export function mapAnalyticsData(
  * tick — no remount required.
  */
 export function invalidateProjectCaches(id: string) {
-  infoCache.delete(id);
-  // Overview AND geo share the `id` / `id::domain` key format — drop every
-  // domain-scoped entry for this project from both, not just the aggregate key.
-  const domainPrefix = `${id}${OVERVIEW_KEY_SEP}`;
-  for (const key of overviewCache.keys()) {
-    if (key === id || key.startsWith(domainPrefix)) overviewCache.delete(key);
-  }
-  for (const key of geoCache.keys()) {
-    if (key === id || key.startsWith(domainPrefix)) geoCache.delete(key);
-  }
-  // Usage-history entries are keyed `id##serviceKey`. Without this the chart kept a
-  // stale empty series after the first sample landed — the revision bump re-ran the
-  // effect but the cached `{kind:"ready"}` short-circuited it back to the old data.
-  const historyPrefix = `${id}${HISTORY_SEP}`;
-  for (const key of usageHistoryCache.keys()) {
-    if (key === id || key.startsWith(historyPrefix)) usageHistoryCache.delete(key);
+  // Invalidate every connection's version. The scope is never passed to the API;
+  // it only prevents cached results from crossing account boundaries.
+  for (const cache of [infoCache, overviewCache, geoCache, usageHistoryCache]) {
+    for (const key of cache.keys()) {
+      const target = key.slice(key.indexOf("\0") + 1);
+      if (target === id || target.startsWith(`${id}${OVERVIEW_KEY_SEP}`) || target.startsWith(`${id}${HISTORY_SEP}`))
+        cache.delete(key);
+    }
   }
   bumpRevision(id);
 }

@@ -1,6 +1,6 @@
 ---
 title: Cloud support
-description: Submit Cloud support requests and manage the ticket queue with operator authority.
+description: Submit Cloud support requests, follow private account tickets, and manage the operator queue.
 ---
 
 `https://openship.io/support` and `/contact` use the same ticket intake. The
@@ -9,9 +9,70 @@ website forwards to `POST /api/cloud/support` on the Cloud API; its default is
 with `OPENSHIP_CLOUD_API_URL`. The website needs no SMTP credentials or operator
 token, and never forwards browser cookies or claimed client IPs.
 
-The API mounts support routes and starts the delivery worker only when
-`CLOUD_MODE=true`. Ticket data is private to Cloud operators and excluded from
-customer, project, and self-hosted instance exports.
+The Cloud API stores support tickets and starts the delivery worker only when
+`CLOUD_MODE=true`. Local installations expose a customer-only relay through the
+existing Cloud connection. Authenticated tickets are private to their creator and Cloud
+operators. Anonymous requests remain operator-only. All support records are
+excluded from customer, project, and self-hosted instance exports.
+
+## Signed-in ticket center
+
+`https://app.openship.io/support` lists the signed-in customer's tickets, with
+topic, Open/Resolved status, subject/reference search, pagination and conversation
+history. Support is the final sidebar entry on Cloud and Cloud-connected self-hosted
+or desktop installations. It also remains visible for existing Cloud projects when
+the connection needs attention. Checkout availability requests
+created in the Cloud dashboard appear in the same history.
+
+Browser requests require a session cookie and the usual trusted-origin checks for
+writes. The server-side Cloud connection uses its verified user session as a Bearer;
+this is a session credential, not an API token. Identity and contact information come from that session.
+API tokens, organization ownership and matching an email address do not grant
+access. Changing the selected team does not change ticket ownership. Existing
+anonymous website submissions are never automatically assigned to an account.
+
+| Method | Path under `/api/cloud/support` | Result |
+| --- | --- | --- |
+| GET | `/session` | The current support account, or `account: null` on local installations without a personal Cloud link |
+| GET | `/mine?status=open&search=build&limit=25` | Own tickets and `nextCursor`; pass it as `before` to load more |
+| POST | `/mine` | Save a ticket with `requestId` (UUID), `category`, `subject` and `message`; return a receipt |
+| GET | `/mine/<reference>` | Own report and customer/support replies |
+| POST | `/mine/<reference>/replies` | Save a reply with `requestId` and `message`; return the conversation |
+| PATCH | `/mine/<reference>` | Set `status` to `open` or `resolved`; return the conversation |
+
+Categories are `deployment`, `billing`, `account` and `general`. Subjects allow
+200 characters and messages 12,000. New tickets are limited to five per account
+per 15 minutes; new replies to 30. Retry the same UUID and content after an
+uncertain response. Confirmed retries do not create another message or consume
+another quota slot. A new customer reply reopens a resolved ticket; retrying an
+older reply does not undo a later resolution.
+
+Replies use the existing durable mail outbox: customer replies notify the support
+mailbox, while operator replies appear in the conversation and are emailed to the
+customer. The dashboard does not expose SMTP attempts, errors, receipts or internal
+addresses. Inbound email replies still require the operator's mailbox workflow;
+they are not automatically imported into the ticket conversation.
+
+### Connected self-hosted and desktop installations
+
+The local inbox uses the signed-in person's own verified Cloud link. Tickets stay
+in Cloud, with the same history and email delivery as `app.openship.io/support`.
+The shared organization connection does not give teammates access to its owner's
+private tickets. A teammate without a personal link can open Support in Cloud and
+sign in there. Disconnected installations offer Settings and Cloud Support links.
+
+The local client reads `/session` first, then sends the returned `account.key` in
+`X-Openship-Support-Account` on every ticket request. This value identifies the
+connection and is not a credential. The relay rejects old or missing bindings with
+`409 SUPPORT_ACCOUNT_CHANGED` and discards responses from a replaced connection.
+The UI clears private state when the account changes and keeps drafts after transient
+failures. Cloud session credentials stay on the server; only safe customer responses
+and rate-limit retry guidance reach the browser.
+
+The local relay validates input and exposes only the six customer endpoints above.
+Public intake and operator endpoints remain Cloud-only. Support failures do not
+clear the Cloud connection used by deployments. Install the updated Cloud API before
+updating connected installations so the session and customer endpoints are available.
 
 ## Delivery and mailbox configuration
 
@@ -79,7 +140,8 @@ response. A 202 response means the reply is saved and queued, not that SMTP has
 delivered it. Read the ticket to check `deliveredAt`, `lastError`, and
 `nextAttemptAt` for each message.
 
-Deploy the API (including migration `0152_cloud_support.sql`) before the website.
+Deploy the API (including migrations `0152_cloud_support.sql` and
+`0167_cloud_support_customers.sql`) before the dashboard.
 Then submit a test report from `/support`, check its reference through the operator
 API, and verify receipt and team notification in the configured mailboxes.
 
@@ -88,7 +150,12 @@ API, and verify receipt and team notification in the configured mailboxes.
 `apps/api/test/modules/cloud-support` covers the website-to-API HTTP request, real
 SQL persistence, the shared SMTP sender, recipient rejection and retry, concurrent
 submission deduplication, worker lease recovery, operator access, replies,
-resolution, pagination, input validation and local-mode isolation. SMTP tests use
+resolution, pagination, input validation, cross-account isolation, anonymous-ticket
+privacy, idempotent customer replies and the local relay. The connection integration
+test exercises a real Cloud session through the existing transport and auth middleware,
+and rejects PAT access. Dashboard tests cover connected and disconnected navigation,
+desktop access, personal versus shared accounts, draft preservation, connection changes
+and stale responses after navigation. SMTP tests use
 a loopback server; they do not send mail to real customers.
 
 ## Operations
@@ -103,5 +170,11 @@ a loopback server; they do not send mail to real customers.
 | Open or resolve a Cloud support ticket. Requires internal operator authority. | `PATCH /api/cloud/support/tickets/:id`<br />`Internal operator` |
 | Save and queue an idempotent support reply, optionally resolving the ticket in the same transaction. Requires internal operator authority. | `POST /api/cloud/support/tickets/:id/replies`<br />`Internal operator` |
 | Retry undelivered support email while preserving active delivery leases and already accepted messages. Requires internal operator authority. | `POST /api/cloud/support/tickets/:id/retry`<br />`Internal operator` |
+| List the signed-in customer’s tickets with status, search and cursor pagination. Uses the personal Cloud session, including on connected local installations. | `GET /api/cloud/support/mine`<br />`Handler authentication` |
+| Read the private support account and connection binding. Local installations require the caller’s own verified Cloud link; shared organization credentials never grant private ticket access. | `GET /api/cloud/support/session`<br />`Handler authentication` |
+| Save an account-owned Cloud support ticket and queue the existing receipt and team notification. | `POST /api/cloud/support/mine`<br />`Handler authentication` |
+| Read the customer’s own conversation without internal delivery metadata. | `GET /api/cloud/support/mine/:id`<br />`Handler authentication` |
+| Save an idempotent customer reply, notify support and reopen the conversation. | `POST /api/cloud/support/mine/:id/replies`<br />`Handler authentication` |
+| Open or resolve the signed-in customer’s own ticket. | `PATCH /api/cloud/support/mine/:id`<br />`Handler authentication` |
 
 {/* api-operations:end */}

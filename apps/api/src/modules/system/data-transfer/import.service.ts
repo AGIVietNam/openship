@@ -40,7 +40,6 @@ import {
 } from "./project-import";
 import { summarizeExportCounts } from "./selection";
 import { transferServer } from "./export.service";
-import { getCloudConnectionStatusForOrg } from "@repo/platform/engine/lib/cloud/session";
 import type {
   DataTransferFile,
   ImportMode,
@@ -68,6 +67,8 @@ const SINGLETON_AND_AUTH = [
   "instance_settings",
   "user",
   "account",
+  "passkey",
+  "two_factor",
   "session",
   "organization",
   "member",
@@ -184,7 +185,7 @@ function assertValidSecretBundle(bundle: SecretBundle | null): void {
   if (bundle.version !== 1 || !Array.isArray(bundle.entries)) {
     throw new InvalidTransferFileError("The credential bundle is invalid.");
   }
-  const schemes = new Set(["scalar", "enc1", "map", "notification-config", "plaintext", "json"]);
+  const schemes = new Set(["scalar", "enc1", "map", "notification-config", "plaintext", "json", "better-auth"]);
   const seen = new Set<string>();
   for (const entry of bundle.entries) {
     if (
@@ -337,6 +338,23 @@ export async function importPreparedInstance(opts: {
 
   const secretsSkipped = !bundle;
 
+  // Refuse an incomplete account restore before touching the destination. A
+  // missing factor must neither lock out the owner nor silently disable 2FA.
+  if (!projectScope) {
+    for (const user of file.dump.tables.user ?? []) {
+      if (user.twoFactorEnabled !== true) continue;
+      const factor = file.dump.tables.two_factor?.find(row => row.userId === user.id);
+      if (!factor || !["secret", "backupCodes"].every(column => bundle?.entries.some(entry =>
+        entry.table === "two_factor" && entry.id === factor.id && entry.column === column &&
+        entry.scheme === "better-auth" && typeof entry.value === "string" && entry.value.length > 0,
+      ))) {
+        throw new InvalidTransferFileError(
+          "This instance contains accounts with two-factor authentication. Include their credentials when exporting and importing, or transfer projects only.",
+        );
+      }
+    }
+  }
+
   let rowsRestored = 0;
 
   // Local-folder (localPath / folder-upload) projects carry a SOURCE-machine path
@@ -348,12 +366,6 @@ export async function importPreparedInstance(opts: {
 
   let secretsRehydrated = 0;
   let projectPreview: ImportPreview | undefined;
-  // Resolve cloud identity before opening the DB transaction. PGlite has one
-  // connection; a global repo query inside its transaction would deadlock.
-  const cloud =
-    projectScope && file.dump.tables.project?.some((row) => row.cloudWorkspaceId)
-      ? await getCloudConnectionStatusForOrg(opts.context!.organizationId)
-      : undefined;
 
   await withMigrationLock(async () => {
     await db.transaction(async (rawTx) => {
@@ -367,7 +379,6 @@ export async function importPreparedInstance(opts: {
           { ...opts.selection, scope: "projects" },
           opts.context!,
           tx,
-          cloud,
         );
         if (plan.preview.blockers.length)
           throw new ProjectImportError(plan.preview.blockers.join("\n"));
@@ -438,7 +449,7 @@ export async function importPreparedInstance(opts: {
 
           const set: Record<string, unknown> = {};
           for (const { spec, entry } of entries) {
-            set[spec.column] = sealForInstance(spec, entry, currentCell);
+            set[spec.column] = await sealForInstance(spec, entry, currentCell);
           }
           const updated = await tx
             .update(rowSpec.table)

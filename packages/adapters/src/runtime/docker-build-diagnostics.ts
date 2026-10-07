@@ -64,6 +64,9 @@ export function extractDockerBuildFailureHint(
   line: string,
   context: DockerBuildDiagnosticContext = {},
 ): string | null {
+  if (/no space left on device|\bENOSPC\b/i.test(line)) {
+    return `${line} — The build server ran out of disk space or filesystem inodes. Images, build layers and application data share its storage. Check the server's disk usage, remove unused build cache or increase its disk capacity, then retry.`;
+  }
   const code = findNonZeroExitCode(line);
   if (code === 137) {
     return `${line} — The build process was killed by SIGKILL (exit code 137). Memory exhaustion is the most common cause, but exit 137 alone does not prove OOM. ${memoryGuidance(context)}`;
@@ -97,6 +100,7 @@ export function chooseDockerBuildFailureHint(
   if (!current) return candidate;
 
   const score = (message: string): number => {
+    if (/ran out of disk space or filesystem inodes/i.test(message)) return 4;
     if (/explicitly reported that it ran out of memory|could not allocate memory/i.test(message)) {
       return 4;
     }

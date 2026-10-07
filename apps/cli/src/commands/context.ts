@@ -16,6 +16,7 @@ import {
   setActiveContext,
 } from "../lib/config";
 import { err, ok, printTable } from "../lib/output";
+import { reportResult } from "../lib/cmd-helpers";
 
 function renderContexts(): void {
   const rows = listContexts().map((c) => ({
@@ -39,7 +40,7 @@ const useCmd = new Command("use")
   .action((name: string) => {
     try {
       setActiveContext(name);
-      ok(`\n  Active context → ${name}\n`);
+      reportResult({ context: name, active: true }, `Active context → ${name}`);
     } catch (e) {
       err((e as Error).message);
       process.exit(1);
@@ -60,7 +61,7 @@ const addCmd = new Command("add")
       token: opts.token,
     });
     if (opts.use) setActiveContext(name);
-    ok(`\n  Saved context "${name}"${opts.use ? " (now active)" : ""}.\n`);
+    reportResult({ context: name, saved: true, active: listContexts().find(context => context.name === name)?.current ?? false }, `Saved context "${name}"${opts.use ? " (now active)" : ""}.`);
   });
 
 const rmCmd = new Command("rm")
@@ -70,7 +71,7 @@ const rmCmd = new Command("rm")
   .action((name: string) => {
     try {
       removeContext(name);
-      ok(`\n  Removed context "${name}".\n`);
+      reportResult({ context: name, removed: true }, `Removed context "${name}".`);
     } catch (e) {
       err((e as Error).message);
       process.exit(1);

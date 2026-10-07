@@ -11,7 +11,8 @@ managed routing, and transfers. The self-hosted connection routes and Cloud cont
 
 There is no named native `cloud` group. To manage Cloud projects through the SDK, use the
 [remote client](/docs/api/sdk/client) with the canonical Cloud API and Cloud organization ID.
-A local owner's Cloud link does not provide verified mapping for a fixed SDK scope; see
+A local owner's Cloud link does not authorize fixed requests or bound/scoped credentials to manage
+Cloud-stored records; see
 [Cloud compatibility](/docs/api/sdk/compatibility#cloud).
 
 ## Self-hosted endpoints
@@ -225,6 +226,27 @@ POST /api/cloud/ingest-subgraph
 />
 
 ```
+POST /api/cloud/promote-project
+```
+
+Explicit project promotion uses this receipt-aware variant with `{ dump, promotionId }`. The source
+persists the transfer ID and original Cloud identity before making the request. Cloud commits the
+receipt in the same transaction as the project data. A retry with that receipt returns the original
+import counts, allowing the source to retry local cleanup without importing or overwriting again.
+Matching project IDs alone do not authorize cleanup; older duplicates without a receipt require
+review. Both instances must support this endpoint. An older Cloud API rejects it before importing.
+
+Before local cleanup starts, Openship blocks configuration writes and checks the source snapshot
+again. An edit committed before this check preserves the local copy with `TRANSFER_SOURCE_CHANGED`;
+edits attempted during cleanup return `PROJECT_TRANSFER_IN_PROGRESS`. Failed cleanup releases this
+guard so the project remains editable. New builds admitted after import are preserved, not cancelled
+as part of promotion.
+
+Promotion transfers configuration; it does not migrate running workloads or persistent application
+data. Deploying a local project on a connected Cloud server uses `serverId` and does not require
+promotion. See [the desktop MCP workflow](/docs/api/mcp#deploy-a-desktop-folder-on-cloud).
+
+```
 POST /api/cloud/export-subgraph
 ```
 
@@ -296,6 +318,18 @@ from the dashboard.
 
 {/* api-operations:start */}
 
+### Managed server connections
+
+| Operation | REST API |
+| --- | --- |
+| Verify the connected Cloud user's administration of a server in the exact requested organization before linking an installation. | `POST /api/cloud/servers/:id/authorize`<br />`server:admin` |
+| Issue namespace-scoped server credentials after ownership checks; work admission also verifies the subscription. Credentials stay on the installation's server and must not be exposed to a browser. | `POST /api/cloud/servers/:id/connection`<br />`server:admin` |
+| Claim durable server activity for a linked installation and synchronize its project registry before execution; a disconnected claim does not expire. | `POST /api/cloud/servers/:id/activity`<br />`server:admin` |
+| Release the same user's exact controller and activity claim after work finishes, and update its registered projects. | `POST /api/cloud/servers/:id/activity/release`<br />`server:admin` |
+| Read a durable deletion receipt using billing administration, the original organization and exact operationId after the server row has been removed. | `GET /api/cloud/server-deletions/:id`<br />`billing:admin` |
+
+### HTTP endpoints
+
 | Operation | REST API |
 | --- | --- |
 | The connected cloud account (name, email, avatar). | `GET /api/cloud/account`<br />`cloud:read` |
@@ -322,6 +356,7 @@ from the dashboard.
 | Friendly "GitHub connected" close-window page. | `GET /api/cloud/github/oauth-success`<br />`Handler authentication` |
 | Cloud-resolved GitHub OAuth identity (login, avatar) for the caller. | `GET /api/cloud/github/user-status`<br />`cloud:read` |
 | Ingest an org- or project-scope subgraph dump (rate-limited, 50MB cap). | `POST /api/cloud/ingest-subgraph`<br />`cloud:admin` |
+| Import a project and its promotion receipt atomically, or acknowledge the same original import on retry (rate-limited, 50MB cap). | `POST /api/cloud/promote-project`<br />`cloud:admin` |
 | Create a Cloud Page (proxy Oblien `pages.create`). | `POST /api/cloud/pages`<br />`cloud:write` |
 | Delete a Cloud Page by slug. | `POST /api/cloud/pages/delete`<br />`cloud:write` |
 | Disable a Cloud Page by slug. | `POST /api/cloud/pages/disable`<br />`cloud:write` |
@@ -333,6 +368,5 @@ from the dashboard.
 | Openship Cloud connection status for this instance. | `GET /api/cloud/status`<br />`cloud:read` · Self-hosted |
 | Delete a project's rows on the SaaS (bring-home / reconcile). | `POST /api/cloud/teardown-project`<br />`cloud:admin` |
 | Mint a namespace-scoped Oblien token for the caller's org. | `POST /api/cloud/token`<br />`cloud:write` |
-| List the org's Openship Cloud (Oblien) workspaces, with drift (orphaned cloud/local). | `GET /api/cloud/workspaces`<br />`cloud:read` · Self-hosted |
 
 {/* api-operations:end */}

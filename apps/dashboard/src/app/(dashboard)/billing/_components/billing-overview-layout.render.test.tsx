@@ -25,6 +25,9 @@ function text(html: string) {
 const state = (tier: BillingState["tier"]): BillingState =>
   ({
     tier, status: "active", monthlyCreditLimit: 1_200_000,
+    subscription: tier === "free" ? null : { tier, status: "active", interval: "monthly", currentPeriod: { start: null, end: null }, cancelAtPeriodEnd: false, canceledAt: null },
+    balance: { total: 0, quotaLimit: 0, quotaUsed: 0, quotaRemaining: 0, unlimited: false },
+    billing: { enabled: true },
     plan: tier === "free" ? null : {
       ...PLANS[tier], monthlyCredits: 1_200_000,
       name: "Live Cloud plan", price: { monthly: 1700, annual: 17000 },
@@ -33,13 +36,13 @@ const state = (tier: BillingState["tier"]): BillingState =>
   }) as unknown as BillingState;
 
 describe("billing sidebar", () => {
-  it("shows the paid plan's live price, credits and features", () => {
-    const out = text(render(<BillingSidebar state={state("starter")} />));
-    expect(out).toContain("What's included");
+  it("shows the paid plan's live price with access to the full comparison", () => {
+    const html = render(<BillingSidebar state={state("starter")} />);
+    const out = text(html);
+    expect(out).toContain("Current plan");
     expect(out).toContain("Live Cloud plan");
     expect(out).toContain("$17");
-    expect(out).toContain("Live Cloud plan : 1,200");
-    expect(out).toContain("Support from the live catalog");
+    expect(html).toContain('href="/billing/plans"');
     expect(out).not.toContain("$10");
   });
 
@@ -52,7 +55,7 @@ describe("billing sidebar", () => {
 
   it("does not invent a price when the paid plan is absent from the response", () => {
     const out = text(render(<BillingSidebar state={{ ...state("pro"), plan: null }} />));
-    expect(out).toContain("Compare all plans");
+    expect(out).toContain("Change plan");
     expect(out).not.toContain("$39");
     expect(out).not.toContain("credits / billing cycle");
   });
@@ -101,7 +104,7 @@ describe("custom plan presentation", () => {
 });
 
 describe("plan comparison", () => {
-  it("shows benefits and places the shared usage explanation once after every plan", () => {
+  it("keeps the cards focused on resources and places shared information below the comparison", () => {
     const plans = (["hobby", "starter", "pro", "team"] as const).map((id) => ({
       ...PLANS[id], features: [...PLANS[id].features], resourceLimits: PLANS[id].oblienLimits,
       listPrice: { monthly: PLANS[id].price.monthly }, effectivePrice: { monthly: PLANS[id].price.monthly }, campaign: null,
@@ -115,11 +118,16 @@ describe("plan comparison", () => {
       expect(card).toContain(copy.buildIncluded);
       expect(card).not.toMatch(/credits|Shared across|More features/i);
     }
-    expect(out).not.toContain("<details");
-    expect(text(out)).toContain("Priority support");
-    expect(text(out).split(copy.poolNote)).toHaveLength(2);
-    expect(out.indexOf('role="note"')).toBeGreaterThan(out.lastIndexOf("</article>"));
-    expect(text(out)).toContain("Hobby : 400");
-    expect(text(out)).toContain("Scale : 9,000");
+    for (const [index, card] of cards.entries()) {
+      for (const feature of plans[index]!.features) expect(card).not.toContain(feature);
+    }
+    const compute = baseDictionary.billing.compute;
+    for (const note of [...Object.values(compute.features), compute.extras])
+      expect(text(out).split(note)).toHaveLength(2);
+    expect(text(out)).not.toContain(compute.included);
+    expect(text(out)).toContain(compute.details);
+    expect(out).not.toMatch(/<details\b[^>]*\bopen(?:=|>|\s)/);
+    expect(out.indexOf("<section")).toBeGreaterThan(out.lastIndexOf("</article>"));
+    expect(text(out)).not.toContain(copy.creditAllowances);
   });
 });

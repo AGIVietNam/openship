@@ -22,7 +22,7 @@
     },
     "hobby": {
       "name": "Hobby",
-      "tagline": "Für kleine Entwicklungsprojekte und gelegentliche Apps mit begrenztem Nutzungsguthaben."
+      "tagline": "Ein kleiner verwalteter Server für persönliche Projekte und alltägliche Apps."
     }
   },
   "features": {
@@ -31,7 +31,7 @@
     "anyWorkload": "Beliebige Workloads – Container, Compose, Worker, Postgres, Redis",
     "runningServices": "{runningServices} laufende Apps, Datenbanken oder Worker",
     "buildMinutes": "{buildMinutes} Build-Minuten pro Monat",
-    "meteredBuilds": "Builds nutzen gemeinsames Guthaben ohne monatliches Zeitlimit",
+    "sharedBuilds": "Builds teilen deinen Server, ohne monatliches Zeitlimit",
     "power": "Bis zu {powerCpu} vCPU und {powerRamGb} GB RAM pro App",
     "projects": "{maxProjects} Projekte",
     "projectsUnlimited": "Unbegrenzt viele Projekte",
@@ -55,10 +55,8 @@
     "selfHostedServices": "Alle Managed Services – Postgres, Redis, Mail",
     "selfHostedClients": "CLI, Web und Desktop – ein Backend",
     "selfHostedFreeSubdomains": "{freeSubdomains} kostenlose Subdomains unter {freeDomainSuffix} bei Verbindung mit Openship Cloud",
-    "usageCredits": "{credits} Nutzungsguthaben pro Monat",
-    "namespaceCapacity": "Insgesamt: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB Speicher",
-    "finiteUsage": "Dauerbetrieb kann zusätzliches Guthaben erfordern.",
-    "oneRunningService": "1 laufende App, Datenbank oder Worker"
+    "monthlyCoverage": "CPU, RAM und Speicher für den bezahlten Monat enthalten",
+    "namespaceCapacity": "Insgesamt: {namespaceCpu} vCPU, {namespaceRamGb} GB RAM, {namespaceDiskGb} GB Speicher"
   },
   "selfHosted": {
     "name": "Selbst gehostet",

@@ -493,6 +493,19 @@ describe("every row carries its own fix", () => {
 
     expect((await listOrganizationIssues(ctx)).issues).toEqual([]);
   });
+
+  it.each([true, false])("keeps an updating row visible with behind=%s", async (behind) => {
+    listOrganizationUpdates.mockResolvedValue([update({
+      behind, latestInProgress: true, inProgressDeploymentId: "dep_update",
+    })]);
+    const { issues } = await listOrganizationIssues(ctx);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      id: "update:proj-2",
+      details: { latestInProgress: true, inProgressDeploymentId: "dep_update" },
+      target: { href: "/build/dep_update" },
+    });
+  });
 });
 
 describe("targets are the thing an operator acts on", () => {

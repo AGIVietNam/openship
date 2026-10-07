@@ -1,88 +1,232 @@
 /**
- * Pre-deploy trigger — enqueues one backup run per enabled
- * `trigger_on_pre_deploy` policy of the project that is about to be deployed.
- *
- * Wired into `deployments/build-pipeline.ts`, inside `executeBuildAndDeploy`
- * and before the build begins. That is the ONE funnel every deploy reaches —
- * `requestBuildAccess` (first deploy / wizard / API / CLI), `redeployBuildSession`
- * (redeploy, app update), `triggerDeployment` (webhook auto-deploy, rollback
- * rebuild) and `startBuild` all get there through `kickoffBuild` — and it is
- * outside the mode branch, so single-app, static-edge and compose deploys are
- * all covered. It used to be called from `redeployBuildSession` behind an opt-in
- * only the app-update path passed, which is why an ordinary deploy — the button,
- * a webhook push, a CLI deploy — ran with no backup at all: the one safety net an
- * operator switches on precisely because something is about to change.
- *
- * There is exactly one call site on purpose. A second one anywhere in the deploy
- * path does not make the net stronger, it enqueues a duplicate run per policy for
- * the same cutover — which is what the removed opt-in did once this became
- * universal.
- *
- * WHY BEFORE THE BUILD, not immediately before the cutover: the old container
- * keeps running for the whole build, so a snapshot taken here is still the
- * pre-deploy state — and since we do not block on the run (below), starting it
- * minutes before `runtime.destroy(previous.containerId)` is what gives it the
- * headroom to actually finish first. Firing at the cutover would have been more
- * precise about WHEN and worse at the thing the toggle promises.
- *
- * Call-site contract: `await` this before the destructive deploy step. The await
- * covers the ENQUEUE only — the durable `backup_run` INSERT plus the job-runner
- * hand-off — never the runs themselves. A slow or failing backup must not block
- * or fail a deploy, so the run may still be in flight when the cutover happens.
- *
- * Semantics:
- *   - Best-effort. Failures are LOGGED but do NOT block the deploy, including a
- *     failure to even read the policies.
- *   - Per-policy queueing: a project with 5 services each having pre-deploy
- *     backups fires 5 jobs. They run in parallel up to the worker's concurrency
- *     cap, alongside the new deploy.
- *   - The orchestrator records `trigger: 'pre_deploy'` so the dashboard can group
- *     these in the run list.
- *   - Redeploys and rollback rebuilds DO fire it. An earlier draft excluded them
- *     because "the rollback orchestrator preserves the previous artifact
- *     natively" — true of the image and the workspace, and irrelevant to the
- *     volumes and the database, which are the only things this trigger captures.
+ * Enqueue each enabled policy and await ALL fan-out children before deployment.
+ * A cached build must not start migrations while a dump holds database locks.
+ * Called once in kickoffBuild, BEFORE workspace admission: backup workers need
+ * that same workspace lock, so waiting inside it would deadlock managed deploys.
  */
-
+import { setTimeout as delay } from "node:timers/promises";
 import { repos } from "@repo/db";
-import { safeErrorMessage } from "@repo/core";
+import {
+  formatBytes,
+  formatDuration,
+  safeErrorMessage,
+  type LogEntry,
+  type PromptPayload,
+} from "@repo/core";
 import { backupOrchestrator } from "../backup.orchestrator";
+import { BACKUP_RUN_CEILING_STALE_MS } from "../backup-stale-sweep";
+import {
+  raceDeploymentCancellation,
+  throwIfDeploymentCancelled,
+} from "../../deployments/deployment-cancellation";
+
+const POLL_MS = 1_000;
+const PROGRESS_MS = 30_000;
+
+interface BackupTarget {
+  policyId: string;
+  userId: string;
+  serviceId?: string;
+}
 
 export async function firePreDeployBackups(opts: {
   projectId: string;
   organizationId: string;
-}): Promise<{ enqueued: number; failed: number }> {
+  signal?: AbortSignal;
+  log?: (message: string, level?: LogEntry["level"]) => void;
+  promptUser?: (prompt: PromptPayload) => Promise<string>;
+}): Promise<{ enqueued: number; completed: number }> {
+  throwIfDeploymentCancelled(opts.signal);
+  const startedAt = Date.now();
+  // Failure to read policies is not evidence that backups are disabled.
+  const policies = await repos.backupPolicy.listEnabledPreDeployByProject(opts.projectId);
+  if (policies.length === 0) return { enqueued: 0, completed: 0 };
+  // Names are only presentation; an unavailable name must not bypass the gate.
+  const services = await repos.service.listByProject(opts.projectId).catch(() => []);
+  const names = new Map(services.map((service) => [service.id, service.name]));
+  const log = (message: string, level?: LogEntry["level"]) => {
+    const line = `[pre-deploy-backup] ${message}`;
+    if (level) opts.log?.(line, level);
+    else opts.log?.(line);
+  };
+  const elapsed = () => formatDuration(Math.floor((Date.now() - startedAt) / 1_000));
+  let targets: BackupTarget[] = policies.map((policy) => ({
+    policyId: policy.id,
+    userId: policy.createdBy ?? "system",
+  }));
   let enqueued = 0;
-  let failed = 0;
+  let completed = 0;
 
-  try {
-    const policies = await repos.backupPolicy.listEnabledPreDeployByProject(opts.projectId);
-    // The pre-deploy backup runs are attributed to the policy creator,
-    // not a specific user (the deploy may have been triggered by anyone
-    // with project:write). The orchestrator pulls policy.createdBy when
-    // trigger.userId is unset.
-    for (const policy of policies) {
-      try {
-        await backupOrchestrator.enqueue({
-          policyId: policy.id,
-          trigger: {
-            source: "pre_deploy",
-            userId: policy.createdBy ?? "system",
-          },
-        });
-        enqueued += 1;
-      } catch (err) {
-        failed += 1;
-        console.warn(
-          `[pre-deploy-backup] policy ${policy.id} enqueue failed: ${safeErrorMessage(err)}`,
+  while (targets.length > 0) {
+    const deadline = Date.now() + BACKUP_RUN_CEILING_STALE_MS;
+    const pending = new Map<string, BackupTarget>();
+    const failures: Array<{ target: BackupTarget; message: string }> = [];
+
+    for (const target of targets) {
+      throwIfDeploymentCancelled(opts.signal);
+      log(
+        `Queueing policy ${target.policyId}${target.serviceId ? ` for ${names.get(target.serviceId) ?? target.serviceId}` : ""}.`,
+      );
+      const queueProgress = setInterval(() => {
+        log(
+          `Still queueing policy ${target.policyId}; ${elapsed()} elapsed. The new release has not started.`,
         );
+      }, PROGRESS_MS);
+      try {
+        const { runIds } = await raceDeploymentCancellation(
+          backupOrchestrator.enqueue({
+            policyId: target.policyId,
+            serviceId: target.serviceId,
+            trigger: { source: "pre_deploy", userId: target.userId },
+          }),
+          opts.signal,
+        );
+        if (runIds.length === 0) throw new Error("no backup runs were created");
+        for (const id of runIds) pending.set(id, target);
+      } catch (error) {
+        throwIfDeploymentCancelled(opts.signal);
+        const message = `policy ${target.policyId}: ${safeErrorMessage(error)}`;
+        failures.push({ target, message });
+        log(`Could not start ${message}`, "warn");
+      } finally {
+        clearInterval(queueProgress);
       }
     }
-  } catch (err) {
-    console.warn(
-      `[pre-deploy-backup] failed to load policies for project ${opts.projectId}: ${safeErrorMessage(err)}`,
-    );
-  }
+    throwIfDeploymentCancelled(opts.signal);
+    if (failures.length && !opts.promptUser) {
+      throw new Error(
+        `Pre-deploy backup could not start: ${failures.map((f) => f.message).join("; ")}`,
+      );
+    }
 
-  return { enqueued, failed };
+    enqueued += pending.size;
+    if (pending.size)
+      log(`Waiting for ${pending.size} backup run(s) before building or starting the new release.`);
+    const statuses = new Map<string, string>();
+    let lastProgressAt = Date.now();
+
+    while (pending.size > 0) {
+      throwIfDeploymentCancelled(opts.signal);
+      if (Date.now() >= deadline) {
+        // A timeout does not prove pg_dump released its locks. Never offer a
+        // bypass while a worker can still be running (including stale sweeps).
+        throw new Error(
+          `Pre-deploy backup timed out waiting for ${[...pending.keys()].join(", ")}; deployment stopped.`,
+        );
+      }
+      const progressDue = Date.now() - lastProgressAt >= PROGRESS_MS;
+      for (const [id, target] of pending) {
+        const run = await repos.backupRun.findById(id);
+        throwIfDeploymentCancelled(opts.signal);
+        if (!run || run.deletedAt)
+          throw new Error(`Pre-deploy backup ${id} disappeared; deployment stopped.`);
+        const label =
+          run.serviceId && names.has(run.serviceId) ? `${names.get(run.serviceId)} (${id})` : id;
+        const failed = ["failed", "cancelled", "server_error"].includes(run.status);
+        const failure = `${label} ${run.status}: ${run.errorMessage || "backup did not complete"}`;
+        if (failed && !opts.promptUser) throw new Error(`Pre-deploy backup ${failure}`);
+
+        // Terminal status precedes the worker's finally. An unclaimed terminal
+        // run is safe too: claimExecution can only claim a queued row.
+        const cleanedUp = !!run.executionFinishedAt || (failed && !run.executionStartedAt);
+        if (failed && cleanedUp) {
+          pending.delete(id);
+          failures.push({
+            target: { ...target, serviceId: run.serviceId ?? target.serviceId },
+            message: failure,
+          });
+          log(`${label} ${run.status}: ${run.errorMessage || "backup did not complete"}`, "warn");
+        } else if (run.status === "succeeded" && cleanedUp) {
+          pending.delete(id);
+          completed += 1;
+          log(`${label} succeeded; ${elapsed()} elapsed.`);
+        } else {
+          const status = failed
+            ? `${run.status}: ${run.errorMessage || "backup did not complete"}; finishing cleanup`
+            : run.status === "succeeded"
+              ? "finishing cleanup"
+              : run.status;
+          if (statuses.get(id) !== status || progressDue) {
+            statuses.set(id, status);
+            const bytes =
+              run.bytesTransferred == null ? "" : `; ${formatBytes(run.bytesTransferred)} uploaded`;
+            log(`${label}: ${status}; ${elapsed()} elapsed${bytes}.`, failed ? "warn" : undefined);
+          }
+        }
+      }
+      if (pending.size === 0) break;
+      if (progressDue) {
+        log(
+          `Still waiting for ${pending.size} backup run(s); the new release has not started. You can stop this deployment while backups finish.`,
+        );
+        lastProgressAt = Date.now();
+      }
+      try {
+        await delay(Math.min(POLL_MS, Math.max(0, deadline - Date.now())), undefined, {
+          signal: opts.signal,
+        });
+      } catch (error) {
+        throwIfDeploymentCancelled(opts.signal);
+        throw error;
+      }
+    }
+
+    if (failures.length === 0) break;
+    // No worker in this attempt can still hold database locks. Only now can an
+    // explicit bypass be safe. Retry just the failed sources, retaining successes.
+    const promptId = `pre_deploy_backup:${crypto.randomUUID()}`;
+    const retry = `${promptId}:retry`;
+    const skip = `${promptId}:skip`;
+    const stop = `${promptId}:stop`;
+    log(`Deployment paused after ${elapsed()}. Waiting for a backup decision.`, "warn");
+    let action: string;
+    try {
+      action = await raceDeploymentCancellation(
+        opts.promptUser!({
+          promptId,
+          title: "Pre-deploy backup failed",
+          message:
+            "The new release has not started. Retry the failed backups, continue without them, or stop this deployment. Continuing may leave you unable to restore data changed by this release.",
+          actions: [
+            { id: retry, label: "Retry backup", variant: "primary" },
+            { id: skip, label: "Continue without backup", variant: "danger" },
+            { id: stop, label: "Stop deployment", variant: "secondary" },
+          ],
+          details: { backupErrors: failures.map((failure) => failure.message) },
+        }),
+        opts.signal,
+      );
+      throwIfDeploymentCancelled(opts.signal);
+    } catch (error) {
+      throwIfDeploymentCancelled(opts.signal);
+      log(`No backup decision received; deployment stopped: ${safeErrorMessage(error)}`, "warn");
+      throw new Error(`Pre-deploy backup decision failed: ${safeErrorMessage(error)}`);
+    }
+    if (action === skip) {
+      log(
+        "User chose Continue without backup for this deployment. Failed backups are not restore points; the backup policies remain enabled.",
+        "warn",
+      );
+      return { enqueued, completed };
+    }
+    if (action !== retry) {
+      log(
+        action === stop
+          ? "User stopped the deployment after a backup failure."
+          : "Invalid backup decision; deployment stopped.",
+        "warn",
+      );
+      throw new Error(
+        `Pre-deploy backup ${action === stop ? "failed; deployment stopped by user" : "decision was invalid; deployment stopped"}.`,
+      );
+    }
+    log("User chose Retry backup. Retrying failed backups before starting the new release.");
+    targets = [
+      ...new Map(
+        failures.map(({ target }) => [`${target.policyId}:${target.serviceId ?? "*"}`, target]),
+      ).values(),
+    ];
+  }
+  log("All required backups succeeded. Deployment can continue.");
+  return { enqueued, completed };
 }

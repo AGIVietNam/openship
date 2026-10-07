@@ -20,6 +20,17 @@ import {
 import { DockerRuntime } from "./docker";
 
 describe("Docker build diagnostics", () => {
+  it.each([
+    "ERROR: failed to solve: ResourceExhausted: copying of parent failed: copy_file_range failed: no space left on device",
+    "npm ERR! code ENOSPC",
+  ])("explains disk exhaustion and preserves it over a generic wrapper error: %s", line => {
+    const hint = extractDockerBuildFailureHint(line, { configuredMemoryMb: 1536, memoryLimitApplied: true });
+    expect(hint).toContain("disk space or filesystem inodes");
+    expect(hint).toContain("increase its disk capacity");
+    expect(hint).not.toContain("raise Build Memory");
+    expect(chooseDockerBuildFailureHint(hint, "failed to solve: exit code 1")).toBe(hint);
+    expect(dockerBuildExitMessage(1, hint)).toBe(hint);
+  });
   it("accepts only bounded integer inactivity timeouts", () => {
     expect(getDockerBuildIdleTimeoutMs(undefined)).toBe(DEFAULT_DOCKER_BUILD_IDLE_TIMEOUT_MS);
     expect(getDockerBuildIdleTimeoutMs("60000")).toBe(MIN_DOCKER_BUILD_IDLE_TIMEOUT_MS);

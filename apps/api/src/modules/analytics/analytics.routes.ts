@@ -15,7 +15,7 @@ import {
   AnalyticsProjectSchemas,
 } from "@repo/contracts";
 import { secureRouter } from "../../lib/secure-router";
-import { cloudProjectProxy, cloudProjectProxyByQuery } from "../../lib/cloud/project-router";
+import { cloudProjectProxyByQuery } from "../../lib/cloud/project-router";
 import * as ctrl from "./analytics.controller";
 
 const r = secureRouter(new Hono(), {
@@ -44,9 +44,9 @@ r.get("/geo", { tag: "analytics:read", mcp: { description: "Visitor geography fo
    The project id rides the PATH (`:projectId`), unlike the reads' `?projectId=`: a
    per-project WRITE needs the standard project:write resolver to gate THIS project, and
    that resolver reads a URL param. As a query param it fell through to the else-branch's
-   `:id` lookup and 400'd "Missing route param :id". `cloudProjectProxy` keys off the same
+   `:id` lookup and 400'd "Missing route param :id". The shared Cloud gateway keys off the same
    `:projectId`, so cloud projects still proxy to the SaaS. */
-r.post("/paths-collection/:projectId", { tag: "project:write", body: AnalyticsProjectSchemas.setPathsCollection.input, auditHandledByOperation: true, ids: { project: "projectId" }, mcp: { description: "Turn per-path request aggregation (Top Paths) on or off for a project." } }, cloudProjectProxy, ctrl.setPathsCollection);
+r.post("/paths-collection/:projectId", { tag: "project:write", body: AnalyticsProjectSchemas.setPathsCollection.input, auditHandledByOperation: true, ids: { project: "projectId" }, mcp: { description: "Turn per-path request aggregation (Top Paths) on or off for a project." } }, ctrl.setPathsCollection);
 
 /* ─── Deployment stats ─────────────────────────────────────────────────── */
 r.get("/deployments", { tag: "analytics:read", mcp: { description: "Deployment statistics (frequency, success rate, durations)." }, query: projectQuery }, cloudProjectProxyByQuery, ctrl.deploymentStats);

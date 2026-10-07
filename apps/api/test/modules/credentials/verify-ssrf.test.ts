@@ -120,3 +120,57 @@ describe("container-registry credential verification SSRF policy", () => {
     );
   });
 });
+
+describe("registry connection errors", () => {
+  it.each([
+    ["probe", undefined, "ERR_TLS_CERT_ALTNAME_INVALID"],
+    [
+      "token endpoint",
+      'Bearer realm="https://registry.example.com/token"',
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    ],
+    ["basic retry", 'Basic realm="registry"', "CERT_HAS_EXPIRED"],
+  ])(
+    "distinguishes TLS failures during the %s without exposing error details",
+    async (_stage, challenge, code) => {
+      if (challenge)
+        h.safeFetch.mockResolvedValueOnce(response(401, { "www-authenticate": challenge }));
+      h.safeFetch.mockRejectedValueOnce(
+        Object.assign(new Error("https://operator:registry-token@private.example/secret"), {
+          code,
+        }),
+      );
+
+      const result = await verifyCredentialValues(provider, values("registry.example.com"));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("TLS");
+      expect(result.reason).toContain("Openship API");
+      expect(result.reason).not.toMatch(/operator|registry-token|private\.example|\/secret/);
+      if (challenge?.startsWith("Bearer")) expect(result.reason).toContain("token endpoint");
+    },
+  );
+
+  it("recognizes a wrapped TLS error without publishing its cause", async () => {
+    h.safeFetch.mockRejectedValueOnce(
+      new Error("fetch failed", {
+        cause: Object.assign(new Error("registry-token"), { code: "SELF_SIGNED_CERT_IN_CHAIN" }),
+      }),
+    );
+    const result = await verifyCredentialValues(provider, values("registry.example.com"));
+    expect(result.reason).toContain("TLS");
+    expect(result.reason).not.toContain("registry-token");
+  });
+
+  it.each([
+    [new Error("Request timed out"), "timed out"],
+    [
+      Object.assign(new Error("connect failed: registry-token"), { code: "ECONNREFUSED" }),
+      "could not be reached",
+    ],
+  ])("keeps timeout and connectivity failures distinct", async (error, detail) => {
+    h.safeFetch.mockRejectedValueOnce(error);
+    const result = await verifyCredentialValues(provider, values("registry.example.com"));
+    expect(result.reason).toContain(detail);
+    expect(result.reason).not.toMatch(/TLS|registry-token/);
+  });
+});

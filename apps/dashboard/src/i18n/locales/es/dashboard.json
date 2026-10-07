@@ -55,6 +55,7 @@
     "appsEmptyDesc": "Un clic, totalmente autoalojado: bases de datos, automatización, analítica, gestores de contraseñas y más, en tus propios servidores."
   },
   "nav": {
+    "support": "Soporte",
     "scale": "Escalado",
     "home": "Inicio",
     "new-project": "Nuevo proyecto",
@@ -74,6 +75,7 @@
     "addMailbox": "Añadir buzón",
     "webmail": "Webmail",
     "sections": {
+      "help": "Ayuda",
       "main": "Principal",
       "settings": "Configuración",
       "infrastructure": "Infraestructura",
@@ -83,7 +85,8 @@
       "account": "Cuenta"
     },
     "apps": "Apps",
-    "jobs": "Trabajos"
+    "jobs": "Trabajos",
+    "workspaces": "Espacios de trabajo"
   },
   "sidebar": {
     "expand": "Expandir barra lateral",

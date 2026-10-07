@@ -510,14 +510,10 @@ jobs:
     name: Build desktop installers (macOS arm64 + x64)
     if: github.event_name == 'push'
     runs-on: macos-14
-    # Apple signing/notarization creds (repo secrets). All optional: when unset,
-    # the signing + notarization steps below are skipped and the build is
-    # unsigned (same as before). See forge.config.js osxSign.
+    # Signing stays with the build; Apple's asynchronous processing has its own
+    # jobs so a network failure cannot discard successfully built installers.
     env:
       APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
     steps:
@@ -534,7 +530,7 @@ jobs:
           job-name: Build desktop installers (macOS arm64 + x64)
           workflow: .github/workflows/release.yml
           job-id: build-desktop-macos
-          artifact: desktop-macos
+          artifact: macos-signed
 
       - name: Read bun version
         if: steps.resume.outputs.reused != 'true'
@@ -604,29 +600,15 @@ jobs:
           bunx electron-forge make --arch=arm64
           bunx electron-forge make --arch=x64
 
-      # Sign the disk image itself, then notarize + staple. notarytool scans the
-      # DMG contents so the signed app inside is notarized too; signing the DMG
-      # (not just the app) makes Gatekeeper's open-assessment on the downloaded
-      # image pass cleanly, and stapling attaches the ticket for offline checks.
-      # Gated on APPLE_ID (the notary credential), separate from signing: set
-      # APPLE_IDENTITY only → signed-but-not-notarized (downloads still warn);
-      # add APPLE_ID/PASSWORD/TEAM_ID → clean notarized download.
-      - name: Sign, notarize + staple DMGs
-        if: steps.resume.outputs.reused != 'true' && (env.APPLE_ID != '')
+      - name: Sign DMGs
+        if: steps.resume.outputs.reused != 'true' && (env.APPLE_IDENTITY != '')
         run: |
           set -euo pipefail
           for arch in arm64 x64; do
             dmg="apps/desktop/out/make/Openship-${arch}.dmg"
             echo "▸ signing ${dmg}"
             codesign --force --timestamp --sign "$APPLE_IDENTITY" "${dmg}"
-            echo "▸ notarizing ${dmg}"
-            xcrun notarytool submit "${dmg}" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait
-            xcrun stapler staple "${dmg}"
-            xcrun stapler validate "${dmg}"
+            codesign --verify --strict "${dmg}"
           done
 
       - name: Collect dmgs
@@ -648,12 +630,96 @@ jobs:
         if: steps.resume.outputs.reused != 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-macos
+          # Keep unfinished installers out of publish's desktop-* pattern.
+          name: macos-signed
           path: |
             dist/Openship-arm64.dmg
             dist/Openship-arm64.dmg.sha256
             dist/Openship-x64.dmg
             dist/Openship-x64.dmg.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  submit-desktop-macos:
+    name: Submit macOS notarization (${{ matrix.arch }})
+    if: github.event_name == 'push'
+    needs: build-desktop-macos
+    runs-on: macos-14
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-signed
+          path: dist
+      - name: Submit the signed installer without waiting
+        if: env.APPLE_ID != ''
+        run: |
+          set -euo pipefail
+          (cd dist && shasum -a 256 -c "Openship-${{ matrix.arch }}.dmg.sha256")
+          bun scripts/macos-notarization.ts submit "dist/Openship-${{ matrix.arch }}.dmg"
+      - name: Save the Apple submission receipt
+        if: env.APPLE_ID != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-notary-${{ matrix.arch }}
+          path: dist/Openship-${{ matrix.arch }}.dmg.notary.json
+          if-no-files-found: error
+          retention-days: 7
+
+  notarize-desktop-macos:
+    name: Finish macOS notarization (${{ matrix.arch }})
+    if: github.event_name == 'push'
+    needs: submit-desktop-macos
+    runs-on: macos-14
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-signed
+          path: dist
+      - uses: actions/download-artifact@v8
+        if: env.APPLE_ID != ''
+        with:
+          name: macos-notary-${{ matrix.arch }}
+          path: dist
+      - name: Verify the saved installer
+        run: cd dist && shasum -a 256 -c "Openship-${{ matrix.arch }}.dmg.sha256"
+      - name: Resume Apple processing and validate the ticket
+        if: env.APPLE_ID != ''
+        run: bun scripts/macos-notarization.ts finish "dist/Openship-${{ matrix.arch }}.dmg"
+      - name: Checksum the finished installer
+        run: cd dist && shasum -a 256 "Openship-${{ matrix.arch }}.dmg" > "Openship-${{ matrix.arch }}.dmg.sha256"
+      - name: Upload the finished installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-${{ matrix.arch }}
+          path: |
+            dist/Openship-${{ matrix.arch }}.dmg
+            dist/Openship-${{ matrix.arch }}.dmg.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -817,7 +883,7 @@ jobs:
   publish:
     name: Publish GitHub release
     if: github.event_name == 'push'
-    needs: [gate, build-openship, build-email, build-dashboard, build-cli-payload, build-desktop, build-desktop-macos]
+    needs: [gate, build-openship, build-email, build-dashboard, build-cli-payload, build-desktop, notarize-desktop-macos]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

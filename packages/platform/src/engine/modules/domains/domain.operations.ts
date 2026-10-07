@@ -1,4 +1,5 @@
-import { AppError, NotFoundError, ValidationError, safeErrorMessage } from "@repo/core";
+import { assertCloudProxyScope } from "../../lib/cloud/scope";
+import { NotFoundError, ValidationError, safeErrorMessage } from "@repo/core";
 import { repos } from "@repo/db";
 import type { DomainDependencies } from "../../../domains";
 import type { ExecutionContext } from "../../../context";
@@ -19,8 +20,7 @@ function record(ctx: ExecutionContext, id: string, eventType: string, after: unk
   audit.recordAsync(operationAuditContext(ctx), { eventType, resourceType: "domain", resourceId: id, after });
 }
 async function projectAuthority(ctx: ExecutionContext, id: string) {
-  if (ctx.scopeMode === "fixed" && await resolveProjectAuthority(id, ctx.organizationId) === "cloud")
-    throw new AppError("This cloud link has no tenant mapping. Connect directly with the cloud organizationId.", 409, "CLOUD_SCOPE_UNAVAILABLE");
+  if (await resolveProjectAuthority(id, ctx.organizationId) === "cloud") assertCloudProxyScope(ctx);
 }
 async function targetServer(ctx: ExecutionContext, id?: string) {
   if (id) await authorization.authorize({ ...ctx, scopeMode: "fixed" }, {

@@ -40,7 +40,7 @@
 
 import { findActiveDeployment } from "@repo/platform/engine/lib/active-deployment";
 import { repos, type Deployment, type Project } from "@repo/db";
-import { BareRuntime, DockerRuntime, type DeploymentRef, type ResourceConfig } from "@repo/adapters";
+import { BareRuntime, DockerRuntime, sharedMountExecutor, type DeploymentRef, type ResourceConfig } from "@repo/adapters";
 import { AppError, safeErrorMessage } from "@repo/core";
 import { isArtifactRef, usableRef } from "../../../lib/container-ref";
 import { resolveDeploymentRuntime } from "../../../lib/deployment-runtime";
@@ -180,7 +180,7 @@ export async function resolveRestorePlan(targetDeploymentId: string): Promise<{
   const presence = new Map<string, boolean>();
   let staticDirPresent = false;
   try {
-    const { runtime } = await resolveDeploymentRuntime(target);
+    const { runtime, executor, localHost } = await resolveDeploymentRuntime(target);
     try {
       unitRestore = runtime.supports("unitRestore") && !!runtime.makeActive;
       if (unitRestore && runtime instanceof BareRuntime) {
@@ -191,10 +191,16 @@ export async function resolveRestorePlan(targetDeploymentId: string): Promise<{
           presence.set(ref, await runtime.imageExistsLocally(ref).catch(() => false));
         }
       }
+      if (staticDir) {
+        // Reuse the already authorized destination while its transport is alive.
+        // Local static mounts need no host SSH channel; managed and SSH servers
+        // must inspect their own files, never a same-named path on the API host.
+        const files = await sharedMountExecutor({ executor, localHost });
+        staticDirPresent = files ? await files.exists(staticDir) : false;
+      }
     } finally {
       await runtime.dispose?.();
     }
-    if (staticDir) staticDirPresent = await hostPathExists(target, staticDir);
   } catch (err) {
     // Host unreachable / server row gone: we can't prove an artifact is there, so
     // plan a safe non-retained recovery rather than promising an instant restore.
@@ -234,36 +240,6 @@ async function resolveEffectiveServiceImages(
     serviceName: row.serviceName ?? null,
     imageRef: row.imageRef,
   }));
-}
-
-/**
- * Does this path exist on the release's OWN host? Static releases only.
- *
- * Must be the right host or the answer is worse than useless: claiming a remote
- * release's files are present because a same-named directory exists locally would
- * plan an instant restore that deploys nothing. So the server executor is used
- * whenever the release records a server, and the local host is consulted ONLY
- * when it recorded none (a desktop/local deploy, where there is no other host).
- */
-async function hostPathExists(target: Deployment, path: string): Promise<boolean> {
-  const serverId = (target.meta as { serverId?: string } | null)?.serverId;
-  const { createExecutor, sharedMountExecutor } = await import("@repo/adapters");
-  const { resolveServerExecutor } = await import("../../../lib/deployment-runtime");
-  try {
-    const { executor, isLocal } = await resolveServerExecutor(serverId, target.organizationId);
-    // The static tree is a mount this process shares 1:1 with its host, so on the local
-    // box read it directly — the same rule the promote half already uses, and asking the
-    // host channel instead let a firewall answer "reclaimed" about a release sitting
-    // right there (#490).
-    const exec = await sharedMountExecutor({ localHost: isLocal, executor });
-    return exec ? await exec.exists(path) : false;
-  } catch {
-    if (serverId) return false; // a real server we couldn't reach → assume gone, rebuild
-    // No server recorded: a desktop/local release, same shared tree.
-    return await createExecutor()
-      .exists(path)
-      .catch(() => false);
-  }
 }
 
 /**

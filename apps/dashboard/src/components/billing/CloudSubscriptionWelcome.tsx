@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import Link from "next/link";
+import { useBillingScope } from "@/components/billing/BillingWorkspaceContext";
 import { PLANS } from "@repo/core";
 import { Icon } from "@repo/ui/icons";
 import { interpolate, useI18n } from "@/components/i18n-provider";
@@ -11,8 +12,9 @@ import { useAuth } from "@/context/AuthContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import type { BillingState } from "@/lib/api/billing";
-import { PlanResources } from "./PlanResources";
+import { PlanCapacity, PlanResources } from "./PlanResources";
 import { CloudPlanIllustration } from "./CloudPlanIllustration";
+import { scopedBillingHref } from "@/lib/billing-links";
 
 function readAcknowledged(key: string): string[] {
   try {
@@ -38,7 +40,7 @@ export function CloudSubscriptionWelcome({
   if (selfHosted || deployMode === "desktop" || !user) return null;
   return (
     <CheckoutWelcome
-      key={`${user.id}:${checkoutId}`}
+      key={`${user.id}:${state.workspace?.id ?? ""}:${checkoutId}`}
       state={state}
       checkoutId={checkoutId}
       userId={user.id}
@@ -57,22 +59,23 @@ function CheckoutWelcome({
 }) {
   const [open, setOpen] = useState(false);
   const storageKey = `openship:subscription-welcome:${userId}`;
+  const purchaseKey = state.workspace ? `${state.workspace.id}:${checkoutId}` : checkoutId;
 
   useEffect(() => {
-    setOpen(!readAcknowledged(storageKey).includes(checkoutId));
+    setOpen(!readAcknowledged(storageKey).includes(purchaseKey));
     const onStorage = (event: StorageEvent) => {
-      if (event.key === storageKey && readAcknowledged(storageKey).includes(checkoutId))
+      if (event.key === storageKey && readAcknowledged(storageKey).includes(purchaseKey))
         setOpen(false);
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [checkoutId, storageKey]);
+  }, [purchaseKey, storageKey]);
 
   function dismiss() {
     setOpen(false);
     try {
-      const acknowledged = readAcknowledged(storageKey).filter((id) => id !== checkoutId);
-      localStorage.setItem(storageKey, JSON.stringify([...acknowledged, checkoutId].slice(-20)));
+      const acknowledged = readAcknowledged(storageKey).filter((id) => id !== purchaseKey);
+      localStorage.setItem(storageKey, JSON.stringify([...acknowledged, purchaseKey].slice(-20)));
     } catch {
       // Storage is optional; dismissing must work in restricted browsers too.
     }
@@ -91,7 +94,14 @@ function WelcomeContent({ state, onClose }: { state: BillingState; onClose: () =
   const titleId = useId();
   const descriptionId = useId();
   const { dialog, onKeyDown } = useDialogFocus(onClose);
+  const billingScope = useBillingScope();
   const plan = state.plan?.id === state.tier ? state.plan : null;
+  const serverId = state.workspace?.serverId;
+  const server = serverId ? state.workspace : null;
+  const planName = plan?.name ?? PLANS[state.tier].name;
+  const planHref = scopedBillingHref("/billing/overview", {
+    ...billingScope, workspaceId: server?.id ?? billingScope.workspaceId,
+  });
   const hasNoProjects = state.capacity?.projects?.used === 0;
 
   return (
@@ -119,26 +129,26 @@ function WelcomeContent({ state, onClose }: { state: BillingState; onClose: () =
       <div className="text-center">
         <p className="inline-flex rounded-full bg-success/10 px-3 py-1 text-sm font-medium text-success">{copy.eyebrow}</p>
         <h2 id={titleId} className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
-          {interpolate(copy.title, { name: plan?.name ?? PLANS[state.tier].name })}
+          {interpolate(server ? copy.serverTitle : copy.title, { name: server?.name ?? planName })}
         </h2>
         <p id={descriptionId} className="mx-auto mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
-          {copy.description}
+          {server ? interpolate(copy.serverDescription, { plan: planName }) : copy.description}
         </p>
       </div>
       {plan && (
         <div className="mt-6">
-          <PlanResources plan={plan} compact />
+          {server ? <PlanCapacity plan={plan} /> : <PlanResources plan={plan} compact />}
         </div>
       )}
       <div className="mt-6 flex flex-col gap-2">
         <Button asChild className="h-11 w-full">
-          <Link href={hasNoProjects ? "/library" : "/projects"} onClick={onClose}>
-            {hasNoProjects ? t.billing.onboarding.stepDeploy : copy.openProjects}
+          <Link href={serverId ? `/servers/${encodeURIComponent(serverId)}` : hasNoProjects ? "/library" : "/projects"} onClick={onClose}>
+            {server ? copy.openServer : hasNoProjects ? t.billing.onboarding.stepDeploy : copy.openProjects}
             <Icon name="arrow-right" className="size-4 rtl:rotate-180" aria-hidden="true" />
           </Link>
         </Button>
         <Button asChild variant="ghost" className="h-10 w-full text-muted-foreground">
-          <Link href="/billing/overview" onClick={onClose}>
+          <Link href={planHref} onClick={onClose}>
             {copy.viewPlan}
           </Link>
         </Button>

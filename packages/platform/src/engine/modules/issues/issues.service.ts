@@ -382,6 +382,7 @@ function updateIssue(row: UpdateRow): SystemIssue {
       currentLabel: row.currentLabel,
       latestLabel: row.latestLabel,
       latestInProgress: row.latestInProgress,
+      inProgressDeploymentId: row.inProgressDeploymentId,
       selfUpdate: isSelf,
     },
     target: {
@@ -390,7 +391,11 @@ function updateIssue(row: UpdateRow): SystemIssue {
       name: row.name,
       // Where the CLI command actually lives (`UpdatesTab`), not the project page
       // whose Update button would 403.
-      href: isSelf ? "/settings?tab=instance" : `/projects/${row.projectId}`,
+      href: isSelf
+        ? "/settings?tab=instance"
+        : row.inProgressDeploymentId
+          ? `/build/${row.inProgressDeploymentId}`
+          : `/projects/${row.projectId}`,
     },
     resolveWith: isSelf
       ? []
@@ -541,10 +546,9 @@ export async function listOrganizationIssues(
 
   for (const row of updates) {
     if (!(await visible("project", row.projectId))) continue;
-    if (!row.behind) continue;
-    // Already deploying the newest version — there is nothing left to act on, and
-    // an "Update" button here is what made pressing it look like it did nothing.
-    if (row.latestInProgress) continue;
+    // Keep the row while its update finishes, including after cutover clears
+    // drift. Every surface can show progress instead of offering another update.
+    if (!row.behind && !row.latestInProgress) continue;
     issues.push(updateIssue(row));
   }
 

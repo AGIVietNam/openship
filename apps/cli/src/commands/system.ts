@@ -7,7 +7,7 @@ import { exitCommand, rethrowCommandExit } from "../lib/command-exit";
  * gated by `localOnly`). We gate client-side with requireSelfHost so cloud
  * targets get a clean message instead of a 404.
  */
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import type { UpdateInstanceSettingsInput } from "@repo/sdk";
 import ora, { type Ora } from "ora";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -464,11 +464,11 @@ dataTransferCommand
   .description("Import an instance export file")
   .requiredOption("--file <path>", "Path to an export file")
   .option("--passphrase <passphrase>", "Passphrase used at export time")
-  .option("--mode <mode>", "wipe (replace) | merge", "wipe")
+  .addOption(new Option("--mode <mode>", "wipe (replace) | merge").choices(["wipe", "merge"]).default("wipe"))
   .option("-y, --yes", "Skip the confirmation prompt")
   .action(async (opts) => {
     await guarded(async () => {
-      const mode = opts.mode === "merge" ? "merge" : "wipe";
+      const mode: "wipe" | "merge" = opts.mode;
       if (mode === "wipe" && !(await confirm("Wipe this instance and import the file?", opts.yes))) {
         err("\n  Aborted.\n");
         exitCommand(1);
